@@ -28,7 +28,7 @@ export default function Login() {
     <div className="flex min-h-dvh items-center justify-center px-6">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
-          <img src="/icon.svg" alt="" className="mb-4 h-16 w-16" />
+          <img src="/logo.png" alt="Capi Finance" className="mb-3 h-24 w-24 object-contain" />
           <h1 className="text-2xl font-bold tracking-tight">
             Capi <span className="text-emerald-400">Finance</span>
           </h1>

@@ -14,8 +14,8 @@ export default function Layout() {
     <div className="min-h-dvh">
       <header className="pt-safe sticky top-0 z-30 border-b border-zinc-900 bg-black/80 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
-          <div className="flex items-center gap-2">
-            <img src="/icon.svg" alt="" className="h-7 w-7" />
+          <div className="flex items-center gap-2.5">
+            <img src="/logo.png" alt="Capi Finance" className="h-8 w-8 object-contain" />
             <span className="font-bold tracking-tight">
               Capi <span className="text-emerald-400">Finance</span>
             </span>
