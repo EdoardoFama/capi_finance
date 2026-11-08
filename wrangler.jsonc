@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "capi-finance",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-10-01",
+  // Front (React buildado em ./dist) e API (/api/*) no mesmo Worker
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "capi-finance-db",
+      "database_id": "87b41fe8-868f-4de6-84a6-0fcb2937be90",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "incomes": [
+    { "name": "SALÁRIO", "amount": 5000 },
+    { "name": "VALE-ALIMENTAÇÃO", "amount": 800 },
+    { "name": "FREELA", "amount": 700 }
+  ],
+  "categories": [
+    { "name": "ALUGUEL", "amount": 1500, "note": "" },
+    { "name": "CONDOMÍNIO", "amount": 400, "note": "Água inclusa" },
+    { "name": "MERCADO", "amount": 900, "note": "" },
+    { "name": "ENERGIA", "amount": 180, "note": "" },
+    { "name": "INTERNET", "amount": 100, "note": "" },
+    { "name": "LANCHES", "amount": 200, "note": "" },
+    { "name": "COMBUSTÍVEL", "amount": 500, "note": "" },
+    { "name": "GÁS", "amount": 50, "note": "" },
+    { "name": "CELULAR", "amount": 50, "note": "" },
+    { "name": "FARMÁCIA", "amount": 150, "note": "" },
+    { "name": "LAZER", "amount": 300, "note": "" },
+    { "name": "ROUPAS", "amount": 200, "note": "" }
+  ]
+}
+

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+
+# Dados sensíveis (senhas e orçamento real ficam fora do Git)
+scripts/*.local.json
+seed/

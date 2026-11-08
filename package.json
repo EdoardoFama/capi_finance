@@ -1,0 +1,37 @@
+{
+  "name": "capi-finance",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\"",
+    "dev": "concurrently -k -n api,web -c green,cyan \"wrangler dev --port 8787\" \"vite\"",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "icons": "node scripts/gen-icons.mjs",
+    "seed:gen": "node scripts/gen-seed.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply capi-finance-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply capi-finance-db --remote",
+    "db:seed:local": "wrangler d1 execute capi-finance-db --local --file=seed/seed.sql",
+    "db:seed:remote": "wrangler d1 execute capi-finance-db --remote --file=seed/seed.sql"
+  },
+  "dependencies": {
+    "hono": "^4.13.17",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.5.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261108.1",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "concurrently": "^10.0.7",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "wrangler": "^4.158.0"
+  }
+}
