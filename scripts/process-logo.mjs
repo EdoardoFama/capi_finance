@@ -91,3 +91,4 @@ async function removeWhiteBackground() {
 }
 
 removeWhiteBackground().catch(console.error);
+
