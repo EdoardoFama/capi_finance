@@ -4,63 +4,77 @@ import { useToast } from '../context';
 import { centsToInput, formatBRL, parseBRL } from '../format';
 import { Card, IconPlus, IconTrash, Input, PageTitle, Spinner } from '../components/ui';
 
-type Field = { key: string; placeholder: string; money?: boolean; className?: string };
-
-/** Linha editável: salva automaticamente ao sair do campo */
-function EditableRow<T extends { id: number }>({
+/* =========================================================
+   LINHA DE GANHO (Nome + Valor na mesma linha + Excluir)
+   ========================================================= */
+function IncomeRow({
   item,
-  fields,
   onSave,
   onDelete,
 }: {
-  item: T;
-  fields: Field[];
-  onSave: (id: number, patch: Record<string, unknown>) => Promise<void>;
-  onDelete: (item: T) => void;
+  item: Income;
+  onSave: (id: number, patch: { name?: string; amount_cents?: number }) => Promise<void>;
+  onDelete: (id: number, name: string) => void;
 }) {
-  const toText = () =>
-    Object.fromEntries(
-      fields.map((f) => {
-        const v = (item as Record<string, unknown>)[f.key];
-        return [f.key, f.money ? centsToInput(v as number) : String(v ?? '')];
-      }),
-    );
-  const [values, setValues] = useState<Record<string, string>>(toText);
-  useEffect(() => setValues(toText()), [item]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [name, setName] = useState(item.name);
+  const [amount, setAmount] = useState(centsToInput(item.amount_cents));
 
-  async function commit(f: Field) {
-    const raw = values[f.key];
-    const current = (item as Record<string, unknown>)[f.key];
-    let next: unknown = raw.trim();
-    if (f.money) {
-      next = parseBRL(raw);
-      if (next === null) return setValues(toText());
-    } else if (f.key === 'name' && !next) {
-      return setValues(toText());
+  useEffect(() => {
+    setName(item.name);
+    setAmount(centsToInput(item.amount_cents));
+  }, [item]);
+
+  async function commitName() {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === item.name) {
+      setName(item.name);
+      return;
     }
-    if (next === current) return setValues(toText());
-    await onSave(item.id, { [f.key]: next }).catch(() => setValues(toText()));
+    await onSave(item.id, { name: trimmed }).catch(() => setName(item.name));
+  }
+
+  async function commitAmount() {
+    const parsed = parseBRL(amount);
+    if (parsed === null || parsed === item.amount_cents) {
+      setAmount(centsToInput(item.amount_cents));
+      return;
+    }
+    await onSave(item.id, { amount_cents: parsed }).catch(() => setAmount(centsToInput(item.amount_cents)));
   }
 
   return (
-    <div className="flex items-start gap-2 py-2">
-      <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-        {fields.map((f) => (
-          <Input
-            key={f.key}
-            value={values[f.key]}
-            placeholder={f.placeholder}
-            inputMode={f.money ? 'decimal' : undefined}
-            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
-            onBlur={() => commit(f)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            className={f.className}
-          />
-        ))}
+    <div className="flex items-center gap-2 py-2">
+      {/* Campo Nome */}
+      <div className="flex-1 min-w-0">
+        <Input
+          value={name}
+          placeholder="Nome do ganho"
+          onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          className="font-medium"
+        />
       </div>
+
+      {/* Campo Valor com prefixo R$ fixo */}
+      <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
+        <span className="text-xs font-semibold text-zinc-500 mr-1.5 select-none">R$</span>
+        <input
+          value={amount}
+          placeholder="0,00"
+          inputMode="decimal"
+          onChange={(e) => setAmount(e.target.value)}
+          onBlur={commitAmount}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          className="w-full bg-transparent text-right font-semibold text-emerald-400 tabular-nums outline-none placeholder:text-zinc-700"
+        />
+      </div>
+
+      {/* Botão Excluir */}
       <button
-        onClick={() => onDelete(item)}
-        className="mt-1 rounded-lg p-2 text-zinc-600 hover:bg-red-500/10 hover:text-red-400"
+        onClick={() => onDelete(item.id, item.name)}
+        className="rounded-lg p-2 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
+        title="Excluir ganho"
         aria-label="Excluir"
       >
         <IconTrash className="h-5 w-5" />
@@ -69,51 +83,159 @@ function EditableRow<T extends { id: number }>({
   );
 }
 
-/** Formulário para adicionar nova linha */
-function AddRow({ fields, onAdd }: { fields: Field[]; onAdd: (values: Record<string, unknown>) => Promise<void> }) {
-  const empty = () => Object.fromEntries(fields.map((f) => [f.key, '']));
-  const [values, setValues] = useState<Record<string, string>>(empty);
+/* =========================================================
+   LINHA DE CATEGORIA / GASTO PREVISTO
+   Linha 1: Nome + Valor (teto) + Excluir
+   Linha 2: Observação (opcional)
+   ========================================================= */
+function CategoryRow({
+  item,
+  onSave,
+  onDelete,
+}: {
+  item: Category;
+  onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string }) => Promise<void>;
+  onDelete: (id: number, name: string) => void;
+}) {
+  const [name, setName] = useState(item.name);
+  const [budget, setBudget] = useState(centsToInput(item.budget_cents));
+  const [note, setNote] = useState(item.note);
+
+  useEffect(() => {
+    setName(item.name);
+    setBudget(centsToInput(item.budget_cents));
+    setNote(item.note);
+  }, [item]);
+
+  async function commitName() {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === item.name) {
+      setName(item.name);
+      return;
+    }
+    await onSave(item.id, { name: trimmed }).catch(() => setName(item.name));
+  }
+
+  async function commitBudget() {
+    const parsed = parseBRL(budget);
+    if (parsed === null || parsed === item.budget_cents) {
+      setBudget(centsToInput(item.budget_cents));
+      return;
+    }
+    await onSave(item.id, { budget_cents: parsed }).catch(() => setBudget(centsToInput(item.budget_cents)));
+  }
+
+  async function commitNote() {
+    const trimmed = note.trim();
+    if (trimmed === item.note) return;
+    await onSave(item.id, { note: trimmed }).catch(() => setNote(item.note));
+  }
+
+  return (
+    <div className="py-2 space-y-1.5">
+      <div className="flex items-center gap-2">
+        {/* Campo Categoria */}
+        <div className="flex-1 min-w-0">
+          <Input
+            value={name}
+            placeholder="Nome da categoria"
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            className="font-medium"
+          />
+        </div>
+
+        {/* Campo Teto Mensal R$ */}
+        <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
+          <span className="text-xs font-semibold text-zinc-500 mr-1.5 select-none">R$</span>
+          <input
+            value={budget}
+            placeholder="0,00"
+            inputMode="decimal"
+            onChange={(e) => setBudget(e.target.value)}
+            onBlur={commitBudget}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            className="w-full bg-transparent text-right font-semibold text-red-400 tabular-nums outline-none placeholder:text-zinc-700"
+          />
+        </div>
+
+        {/* Botão Excluir */}
+        <button
+          onClick={() => onDelete(item.id, item.name)}
+          className="rounded-lg p-2 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
+          title="Excluir categoria"
+          aria-label="Excluir"
+        >
+          <IconTrash className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Observação logo abaixo (indentada) */}
+      <div className="pr-12">
+        <input
+          value={note}
+          placeholder="Adicionar observação (ex: Água inclusa)..."
+          onChange={(e) => setNote(e.target.value)}
+          onBlur={commitNote}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          className="w-full rounded-lg bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-400 placeholder:text-zinc-600 outline-none border border-transparent focus:border-zinc-800"
+        />
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   FORMULÁRIO PARA ADICIONAR NOVO GANHO
+   ========================================================= */
+function AddIncomeRow({ onAdd }: { onAdd: (name: string, amountCents: number) => Promise<void> }) {
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const out: Record<string, unknown> = {};
-    for (const f of fields) {
-      if (f.money) {
-        const c = parseBRL(values[f.key] || '0');
-        if (c === null) return toast('Valor inválido', 'error');
-        out[f.key] = c;
-      } else out[f.key] = values[f.key].trim();
-    }
-    if (!out.name) return toast('Informe o nome', 'error');
+    const trimmed = name.trim();
+    if (!trimmed) return toast('Informe o nome do ganho', 'error');
+    const cents = parseBRL(amount || '0');
+    if (cents === null) return toast('Valor inválido', 'error');
+
     setBusy(true);
     try {
-      await onAdd(out);
-      setValues(empty());
+      await onAdd(trimmed, cents);
+      setName('');
+      setAmount('');
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={submit} className="flex items-start gap-2 border-t border-dashed border-zinc-800 pt-3">
-      <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-        {fields.map((f) => (
-          <Input
-            key={f.key}
-            value={values[f.key]}
-            placeholder={f.placeholder}
-            inputMode={f.money ? 'decimal' : undefined}
-            onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
-            className={f.className}
-          />
-        ))}
+    <form onSubmit={submit} className="flex items-center gap-2 border-t border-dashed border-zinc-800 pt-3 mt-1">
+      <div className="flex-1 min-w-0">
+        <Input
+          value={name}
+          placeholder="Novo ganho..."
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+      <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5">
+        <span className="text-xs font-semibold text-zinc-500 mr-1.5">R$</span>
+        <input
+          value={amount}
+          placeholder="0,00"
+          inputMode="decimal"
+          onChange={(e) => setAmount(e.target.value)}
+          className="w-full bg-transparent text-right font-semibold text-emerald-400 tabular-nums outline-none placeholder:text-zinc-700"
+        />
       </div>
       <button
         disabled={busy}
-        className="mt-1 rounded-lg bg-emerald-400 p-2 text-black hover:bg-emerald-300 disabled:opacity-60"
-        aria-label="Adicionar"
+        className="rounded-xl bg-emerald-400 p-2 text-black hover:bg-emerald-300 transition disabled:opacity-60"
+        aria-label="Adicionar ganho"
+        title="Adicionar ganho"
       >
         <IconPlus className="h-5 w-5" />
       </button>
@@ -121,16 +243,82 @@ function AddRow({ fields, onAdd }: { fields: Field[]; onAdd: (values: Record<str
   );
 }
 
-const INCOME_FIELDS: Field[] = [
-  { key: 'name', placeholder: 'Nome', className: 'flex-1 min-w-0 basis-32 font-medium' },
-  { key: 'amount_cents', placeholder: '0,00', money: true, className: 'w-32 shrink-0 text-right tabular-nums' },
-];
-const CATEGORY_FIELDS: Field[] = [
-  { key: 'name', placeholder: 'Categoria', className: 'flex-1 min-w-0 basis-32 font-medium' },
-  { key: 'budget_cents', placeholder: '0,00', money: true, className: 'w-32 shrink-0 text-right tabular-nums' },
-  { key: 'note', placeholder: 'Observação (opcional)', className: 'basis-full !py-1.5 text-sm text-zinc-400' },
-];
+/* =========================================================
+   FORMULÁRIO PARA ADICIONAR NOVA CATEGORIA
+   ========================================================= */
+function AddCategoryRow({
+  onAdd,
+}: {
+  onAdd: (name: string, budgetCents: number, note: string) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [budget, setBudget] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return toast('Informe o nome da categoria', 'error');
+    const cents = parseBRL(budget || '0');
+    if (cents === null) return toast('Valor inválido', 'error');
+
+    setBusy(true);
+    try {
+      await onAdd(trimmed, cents, note.trim());
+      setName('');
+      setBudget('');
+      setNote('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2 border-t border-dashed border-zinc-800 pt-3 mt-1">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <Input
+            value={name}
+            placeholder="Nova categoria..."
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5">
+          <span className="text-xs font-semibold text-zinc-500 mr-1.5">R$</span>
+          <input
+            value={budget}
+            placeholder="0,00"
+            inputMode="decimal"
+            onChange={(e) => setBudget(e.target.value)}
+            className="w-full bg-transparent text-right font-semibold text-red-400 tabular-nums outline-none placeholder:text-zinc-700"
+          />
+        </div>
+        <button
+          disabled={busy}
+          className="rounded-xl bg-emerald-400 p-2 text-black hover:bg-emerald-300 transition disabled:opacity-60"
+          aria-label="Adicionar categoria"
+          title="Adicionar categoria"
+        >
+          <IconPlus className="h-5 w-5" />
+        </button>
+      </div>
+      <div className="pr-12">
+        <input
+          value={note}
+          placeholder="Observação (opcional)..."
+          onChange={(e) => setNote(e.target.value)}
+          className="w-full rounded-lg bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-400 placeholder:text-zinc-600 outline-none border border-transparent focus:border-zinc-800"
+        />
+      </div>
+    </form>
+  );
+}
+
+/* =========================================================
+   TELA PRINCIPAL: ORÇAMENTO PESSOAL
+   ========================================================= */
 export default function Budget() {
   const toast = useToast();
   const [incomes, setIncomes] = useState<Income[] | null>(null);
@@ -145,7 +333,6 @@ export default function Budget() {
       .catch((e) => toast(e.message, 'error'));
   }, [toast]);
 
-  // Helpers genéricos de CRUD com feedback
   const run = async <R,>(fn: () => Promise<R>, ok?: string) => {
     try {
       const r = await fn();
@@ -167,7 +354,7 @@ export default function Budget() {
     <div className="space-y-4">
       <PageTitle title="Orçamento Pessoal" subtitle="Sua meta mensal. Os gastos previstos viram o teto de cada categoria." />
 
-      {/* Resumo */}
+      {/* Cards de Resumo */}
       <div className="grid grid-cols-3 gap-2">
         <Card className="!p-3">
           <p className="text-[11px] tracking-wide text-zinc-500 uppercase">Ganhos</p>
@@ -185,73 +372,78 @@ export default function Budget() {
         </Card>
       </div>
 
-      {/* Ganhos */}
+      {/* Seção Ganhos */}
       <Card>
-        <div className="mb-1 flex items-center justify-between">
-          <h2 className="font-semibold">Ganhos</h2>
+        <div className="mb-2 flex items-center justify-between border-b border-zinc-900 pb-2">
+          <h2 className="font-semibold text-base">Ganhos</h2>
           <span className="text-sm font-semibold text-emerald-400 tabular-nums">{formatBRL(totalIncome)}</span>
         </div>
         <div className="divide-y divide-zinc-900">
           {incomes.map((it) => (
-            <EditableRow
+            <IncomeRow
               key={it.id}
               item={it}
-              fields={INCOME_FIELDS}
               onSave={async (id, patch) => {
                 const upd = await run(() => api<Income>(`/incomes/${id}`, { method: 'PUT', body: patch }), 'Salvo');
                 setIncomes((l) => l!.map((x) => (x.id === id ? upd : x)));
               }}
-              onDelete={async (item) => {
-                if (!confirm(`Excluir "${item.name}"?`)) return;
-                await run(() => api(`/incomes/${item.id}`, { method: 'DELETE' }), 'Excluído');
-                setIncomes((l) => l!.filter((x) => x.id !== item.id));
+              onDelete={async (id, name) => {
+                if (!confirm(`Excluir ganho "${name}"?`)) return;
+                await run(() => api(`/incomes/${id}`, { method: 'DELETE' }), 'Excluído');
+                setIncomes((l) => l!.filter((x) => x.id !== id));
               }}
             />
           ))}
         </div>
-        <AddRow
-          fields={INCOME_FIELDS}
-          onAdd={async (v) => {
-            const created = await run(() => api<Income>('/incomes', { method: 'POST', body: v }), 'Ganho adicionado');
+        <AddIncomeRow
+          onAdd={async (name, amountCents) => {
+            const created = await run(
+              () => api<Income>('/incomes', { method: 'POST', body: { name, amount_cents: amountCents } }),
+              'Ganho adicionado',
+            );
             setIncomes((l) => [...l!, created]);
           }}
         />
       </Card>
 
-      {/* Gastos previstos */}
+      {/* Seção Gastos Previstos */}
       <Card>
-        <div className="mb-1 flex items-center justify-between">
-          <h2 className="font-semibold">Gastos previstos (teto por categoria)</h2>
+        <div className="mb-2 flex items-center justify-between border-b border-zinc-900 pb-2">
+          <div>
+            <h2 className="font-semibold text-base">Gastos previstos</h2>
+            <p className="text-xs text-zinc-500">Teto máximo estipulado por categoria</p>
+          </div>
           <span className="text-sm font-semibold text-red-400 tabular-nums">{formatBRL(totalBudget)}</span>
         </div>
         <div className="divide-y divide-zinc-900">
           {cats.map((c) => (
-            <EditableRow
+            <CategoryRow
               key={c.id}
               item={c}
-              fields={CATEGORY_FIELDS}
               onSave={async (id, patch) => {
                 const upd = await run(() => api<Category>(`/categories/${id}`, { method: 'PUT', body: patch }), 'Salvo');
                 setCats((l) => l!.map((x) => (x.id === id ? upd : x)));
               }}
-              onDelete={async (item) => {
-                if (!confirm(`Excluir a categoria "${item.name}"?`)) return;
-                await run(() => api(`/categories/${item.id}`, { method: 'DELETE' }), 'Categoria excluída');
-                setCats((l) => l!.filter((x) => x.id !== item.id));
+              onDelete={async (id, name) => {
+                if (!confirm(`Excluir a categoria "${name}"?`)) return;
+                await run(() => api(`/categories/${id}`, { method: 'DELETE' }), 'Categoria excluída');
+                setCats((l) => l!.filter((x) => x.id !== id));
               }}
             />
           ))}
         </div>
-        <AddRow
-          fields={CATEGORY_FIELDS}
-          onAdd={async (v) => {
-            const created = await run(() => api<Category>('/categories', { method: 'POST', body: v }), 'Categoria adicionada');
+        <AddCategoryRow
+          onAdd={async (name, budgetCents, note) => {
+            const created = await run(
+              () => api<Category>('/categories', { method: 'POST', body: { name, budget_cents: budgetCents, note } }),
+              'Categoria adicionada',
+            );
             setCats((l) => [...l!, created]);
           }}
         />
       </Card>
 
-      {/* Gastos por fora */}
+      {/* Card Gastos por fora */}
       <Card className={leftover < 0 ? 'border-red-500/40' : 'border-emerald-500/30'}>
         <div className="flex items-center justify-between">
           <div>
@@ -266,4 +458,3 @@ export default function Budget() {
     </div>
   );
 }
-
