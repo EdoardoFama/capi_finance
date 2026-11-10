@@ -1,12 +1,13 @@
 import { NavLink, Outlet } from 'react-router';
 import { useAuth } from '../context';
-import { IconHome, IconList, IconLogout, IconPlus, IconWallet } from './ui';
+import { IconHome, IconList, IconLogout, IconPlus, IconTrendingUp, IconWallet } from './ui';
 
 const NAV = [
   { to: '/', label: 'Início', icon: IconHome, end: true },
   { to: '/orcamento', label: 'Orçamento', icon: IconWallet, end: false },
   { to: '/lancar', label: 'Lançar', icon: IconPlus, end: false },
   { to: '/extrato', label: 'Extrato', icon: IconList, end: false },
+  { to: '/investimentos', label: 'Investimentos', icon: IconTrendingUp, end: false },
 ];
 
 export default function Layout() {
@@ -58,7 +59,7 @@ export default function Layout() {
 
       {/* Navegação inferior (mobile) */}
       <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-zinc-900 bg-black/90 backdrop-blur md:hidden">
-        <div className="mx-auto grid max-w-md grid-cols-4">
+        <div className="mx-auto grid max-w-md grid-cols-5">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}

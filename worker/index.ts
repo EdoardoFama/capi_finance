@@ -406,4 +406,72 @@ app.get('/dashboard', async (c) => {
   });
 });
 
+// ---------- investimentos ----------
+app.get('/investments', async (c) => {
+  const uid = c.get('userId');
+
+  // Buscar contas
+  const { results: accounts } = await c.env.DB.prepare(
+    'SELECT id, name, color, sort_order FROM investment_accounts WHERE user_id = ? ORDER BY sort_order, id',
+  )
+    .bind(uid)
+    .all<{ id: number; name: string; color: string; sort_order: number }>();
+
+  // Buscar todos os snapshots
+  const { results: snapshots } = await c.env.DB.prepare(
+    'SELECT account_id, month, balance_cents, delta_cents FROM investment_snapshots WHERE user_id = ? ORDER BY month ASC',
+  )
+    .bind(uid)
+    .all<{ account_id: number; month: string; balance_cents: number; delta_cents: number }>();
+
+  return c.json({
+    accounts,
+    snapshots,
+  });
+});
+
+app.post('/investments/snapshot', async (c) => {
+  const data = await body(c);
+  const uid = c.get('userId');
+  const accountId = idParam(String(data.account_id));
+  const month = str(data.month, 'mês')!;
+  if (!/^\d{4}-\d{2}$/.test(month)) bad('Formato de mês inválido (use YYYY-MM)');
+
+  const balance = cents(data.balance_cents, 'saldo')!;
+  const delta = typeof data.delta_cents === 'number' && Number.isInteger(data.delta_cents)
+    ? data.delta_cents
+    : 0;
+
+  await c.env.DB.prepare(
+    `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, account_id, month) DO UPDATE SET
+       balance_cents = excluded.balance_cents,
+       delta_cents = excluded.delta_cents`,
+  )
+    .bind(uid, accountId, month, balance, delta)
+    .run();
+
+  return c.json({ ok: true });
+});
+
+app.post('/investments/accounts', async (c) => {
+  const data = await body(c);
+  const uid = c.get('userId');
+  const name = str(data.name, 'nome')!.toUpperCase();
+  const color = str(data.color ?? '#10b981', 'cor', { required: false, max: 20 }) ?? '#10b981';
+
+  const row = await guardUnique(() =>
+    c.env.DB.prepare(
+      `INSERT INTO investment_accounts (user_id, name, color, sort_order)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM investment_accounts WHERE user_id = ?))
+       RETURNING id, name, color, sort_order`,
+    )
+      .bind(uid, name, color, uid)
+      .first(),
+  );
+
+  return c.json(row, 201);
+});
+
 export default app;

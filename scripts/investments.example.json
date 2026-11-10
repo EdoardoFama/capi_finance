@@ -1,0 +1,17 @@
+{
+  "accounts": [
+    { "name": "NUBANK", "color": "#a855f7" },
+    { "name": "INTER", "color": "#f97316" },
+    { "name": "SANTANDER", "color": "#ef4444" }
+  ],
+  "months": [
+    {
+      "month": "2026-02",
+      "records": {
+        "NUBANK": { "balance": 10000, "delta": 0 },
+        "INTER": { "balance": 20000, "delta": 0 },
+        "SANTANDER": { "balance": 15000, "delta": 0 }
+      }
+    }
+  ]
+}

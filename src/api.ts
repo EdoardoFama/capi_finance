@@ -50,3 +50,22 @@ export type Dashboard = {
   categories: DashboardCategory[];
 };
 
+export type InvestmentAccount = {
+  id: number;
+  name: string;
+  color: string;
+  sort_order: number;
+};
+
+export type InvestmentSnapshot = {
+  account_id: number;
+  month: string;
+  balance_cents: number;
+  delta_cents: number;
+};
+
+export type InvestmentsData = {
+  accounts: InvestmentAccount[];
+  snapshots: InvestmentSnapshot[];
+};
+
