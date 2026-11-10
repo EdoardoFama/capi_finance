@@ -17,6 +17,9 @@ export const IconWallet = (p: { className?: string }) => (
 export const IconPlus = (p: { className?: string }) => (
   <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>
 );
+export const IconList = (p: { className?: string }) => (
+  <Svg {...p}><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" strokeWidth={3} /><line x1="3" y1="12" x2="3.01" y2="12" strokeWidth={3} /><line x1="3" y1="18" x2="3.01" y2="18" strokeWidth={3} /></Svg>
+);
 export const IconTrash = (p: { className?: string }) => (
   <Svg {...p}><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 13h10l1-13" /><path d="M9 7V4h6v3" /></Svg>
 );

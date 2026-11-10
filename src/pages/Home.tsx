@@ -56,6 +56,14 @@ export default function Home() {
                 <p className="font-semibold">{formatBRL(data.total_income_cents)}</p>
               </div>
             </div>
+            <div className="mt-3 border-t border-zinc-900 pt-3">
+              <Link
+                to="/extrato"
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
+              >
+                Ver extrato completo do mês →
+              </Link>
+            </div>
           </Card>
 
           {/* Categorias */}

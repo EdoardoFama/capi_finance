@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Home from './pages/Home';
 import Budget from './pages/Budget';
 import Expenses from './pages/Expenses';
+import History from './pages/History';
 
 export default function App() {
   const { user } = useAuth();
@@ -15,6 +16,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="orcamento" element={<Budget />} />
         <Route path="lancar" element={<Expenses />} />
+        <Route path="extrato" element={<History />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
