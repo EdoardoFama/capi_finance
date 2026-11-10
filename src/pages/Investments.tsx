@@ -76,29 +76,23 @@ export default function Investments() {
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
       let totalBalance = 0;
-      let totalDelta = 0; // soma dos deltas (saques/aportes) do mês
+      let totalDelta = 0; // soma de todos os deltas do mês
+      let valorizacaoInvest = 0; // soma dos rendimentos positivos (quanto rendeu)
 
       data.accounts.forEach((acc) => {
         const snap = snapshotMap.get(`${acc.id}_${m}`);
         if (snap) {
           totalBalance += snap.balance_cents;
           totalDelta += snap.delta_cents;
+          // Se for positivo, é rendimento
+          if (snap.delta_cents > 0) {
+            valorizacaoInvest += snap.delta_cents;
+          }
         }
       });
 
-      // Valorização dos investimentos em relação ao mês anterior:
-      // se houve mês anterior: totalBalance(atual) - totalBalance(anterior) - totalDelta(atual)
-      let valorizacaoInvest = 0;
-      if (i > 0) {
-        const prevMonth = months[i - 1];
-        const prevTotal = summaries[prevMonth]?.totalBalance ?? 0;
-        if (prevTotal > 0 && totalBalance > 0) {
-          valorizacaoInvest = totalBalance - prevTotal - totalDelta;
-        }
-      }
-
-      // Valor Diferença: valorizacaoInvest + totalDelta (ou balanço direto do mês)
-      const valorDiferenca = valorizacaoInvest + totalDelta;
+      // Valor Diferença: soma de todas as variações (rendimentos + saques) daquele mês
+      const valorDiferenca = totalDelta;
 
       summaries[m] = {
         totalBalance,
@@ -494,3 +488,4 @@ export default function Investments() {
     </div>
   );
 }
+
