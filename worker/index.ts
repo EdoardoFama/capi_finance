@@ -246,7 +246,21 @@ app.delete('/categories/:id', async (c) => {
 
 // ---------- lançamentos (expenses) ----------
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
-  e.description, e.spent_on, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id`;
+  e.description, e.spent_on, e.payment_method, e.installment_current, e.installment_total,
+  e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id`;
+
+function addMonthsToDate(isoDate: string, monthsToAdd: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  // Gera no dia correspondente, limitando aos dias máximos daquele mês
+  const targetMonthIndex = (m - 1) + monthsToAdd;
+  const targetYear = y + Math.floor(targetMonthIndex / 12);
+  const targetMonth = (targetMonthIndex % 12 + 12) % 12 + 1;
+  const daysInMonth = new Date(targetYear, targetMonth, 0).getDate();
+  const targetDay = Math.min(d, daysInMonth);
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${targetYear}-${pad(targetMonth)}-${pad(targetDay)}`;
+}
 
 app.get('/expenses', async (c) => {
   const [start, end] = monthRange(c.req.query('month'));
@@ -275,14 +289,52 @@ app.post('/expenses', async (c) => {
   const spentOn = str(data.spent_on, 'data')!;
   if (!isDate(spentOn)) bad('Data inválida');
   await assertCategory(c, categoryId, uid);
-  const { id } = (await c.env.DB.prepare(
-    `INSERT INTO expenses (user_id, category_id, amount_cents, description, spent_on)
-     VALUES (?, ?, ?, ?, ?) RETURNING id`,
+
+  // Forma de pagamento
+  const rawMethod = typeof data.payment_method === 'string' ? data.payment_method : 'debit';
+  const paymentMethod = ['debit', 'pix', 'credit'].includes(rawMethod) ? rawMethod : 'debit';
+
+  // Parcelamento (apenas permitido quando credit)
+  const installments = paymentMethod === 'credit' && typeof data.installments === 'number' && Number.isInteger(data.installments) && data.installments > 1
+    ? Math.min(data.installments, 48)
+    : 1;
+
+  if (installments === 1) {
+    const { id } = (await c.env.DB.prepare(
+      `INSERT INTO expenses (user_id, category_id, amount_cents, description, spent_on, payment_method, installment_current, installment_total)
+       VALUES (?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
+    )
+      .bind(uid, categoryId, amount, description, spentOn, paymentMethod)
+      .first<{ id: number }>())!;
+    const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
+    return c.json(row, 201);
+  }
+
+  // Parcelado em N vezes
+  const groupId = randomToken();
+  const baseInstallment = Math.floor(amount / installments);
+  const remainder = amount % installments; // centavos sobressalentes adicionados na primeira parcela
+
+  const statements: D1PreparedStatement[] = [];
+  for (let i = 1; i <= installments; i++) {
+    const installmentAmount = i === 1 ? baseInstallment + remainder : baseInstallment;
+    const installmentDate = addMonthsToDate(spentOn, i - 1);
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO expenses (user_id, category_id, amount_cents, description, spent_on, payment_method, installment_current, installment_total, installment_group_id)
+         VALUES (?, ?, ?, ?, ?, 'credit', ?, ?, ?)`,
+      ).bind(uid, categoryId, installmentAmount, description, installmentDate, i, installments, groupId),
+    );
+  }
+
+  await c.env.DB.batch(statements);
+
+  const firstRow = await c.env.DB.prepare(
+    `${EXPENSE_SELECT} WHERE e.installment_group_id = ? AND e.installment_current = 1`,
   )
-    .bind(uid, categoryId, amount, description, spentOn)
-    .first<{ id: number }>())!;
-  const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
-  return c.json(row, 201);
+    .bind(groupId)
+    .first();
+  return c.json(firstRow, 201);
 });
 
 app.put('/expenses/:id', async (c) => {
@@ -309,7 +361,22 @@ app.put('/expenses/:id', async (c) => {
 
 app.delete('/expenses/:id', async (c) => {
   const id = idParam(c.req.param('id'));
-  await c.env.DB.prepare('DELETE FROM expenses WHERE id = ? AND user_id = ?').bind(id, c.get('userId')).run();
+  const deleteAllGroup = c.req.query('all_installments') === 'true';
+  const uid = c.get('userId');
+
+  const exp = await c.env.DB.prepare('SELECT installment_group_id FROM expenses WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .first<{ installment_group_id: string | null }>();
+
+  if (!exp) return c.json({ ok: true });
+
+  if (deleteAllGroup && exp.installment_group_id) {
+    await c.env.DB.prepare('DELETE FROM expenses WHERE installment_group_id = ? AND user_id = ?')
+      .bind(exp.installment_group_id, uid)
+      .run();
+  } else {
+    await c.env.DB.prepare('DELETE FROM expenses WHERE id = ? AND user_id = ?').bind(id, uid).run();
+  }
   return c.json({ ok: true });
 });
 

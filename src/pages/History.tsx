@@ -33,6 +33,22 @@ export default function History() {
   }, [load]);
 
   async function remove(exp: Expense) {
+    if (exp.installment_total > 1 && exp.installment_group_id) {
+      const deleteAll = confirm(
+        `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
+          `Deseja excluir TODAS as ${exp.installment_total} parcelas?\n\n` +
+          `[OK] = Excluir todas as parcelas\n[Cancelar] = Excluir apenas esta parcela`,
+      );
+      try {
+        await api(`/expenses/${exp.id}?all_installments=${deleteAll}`, { method: 'DELETE' });
+        toast(deleteAll ? 'Todas as parcelas foram excluídas' : 'Parcela excluída');
+        await load();
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      }
+      return;
+    }
+
     if (!confirm(`Deseja excluir o gasto de ${formatBRL(exp.amount_cents)} em ${exp.category_name}?`)) return;
     try {
       await api(`/expenses/${exp.id}`, { method: 'DELETE' });
@@ -164,10 +180,19 @@ export default function History() {
                 {items.map((exp) => (
                   <div key={exp.id} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-900/40 transition">
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-zinc-800">
                           {exp.category_name}
                         </span>
+                        {exp.payment_method && (
+                          <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-800 uppercase">
+                            {exp.payment_method === 'credit'
+                              ? exp.installment_total > 1
+                                ? `Crédito ${exp.installment_current}/${exp.installment_total}`
+                                : 'Crédito'
+                              : exp.payment_method}
+                          </span>
+                        )}
                         {exp.description && (
                           <p className="truncate text-sm text-zinc-300 font-normal">{exp.description}</p>
                         )}

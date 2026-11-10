@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
-import { api, type Dashboard, type Expense } from '../api';
+import { api, type Dashboard, type Expense, type PaymentMethod } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, parseBRL, percent, todayISO } from '../format';
 import { Card, IconTrash, Input, MonthPicker, PageTitle, ProgressBar, Spinner, textColor } from '../components/ui';
@@ -17,6 +17,9 @@ export default function Expenses() {
   const [categoryId, setCategoryId] = useState<number | null>(Number(params.get('categoria')) || null);
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayISO);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debit');
+  const [installments, setInstallments] = useState(1);
+  const [isInstallmentModalOpen, setIsInstallmentModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -39,6 +42,15 @@ export default function Expenses() {
 
   const selected = dash?.categories.find((c) => c.id === categoryId);
 
+  function handleSelectPaymentMethod(method: PaymentMethod) {
+    setPaymentMethod(method);
+    if (method === 'credit') {
+      setIsInstallmentModalOpen(true);
+    } else {
+      setInstallments(1);
+    }
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     const cents = parseBRL(amount);
@@ -48,11 +60,27 @@ export default function Expenses() {
     try {
       await api<Expense>('/expenses', {
         method: 'POST',
-        body: { amount_cents: cents, category_id: categoryId, description, spent_on: date },
+        body: {
+          amount_cents: cents,
+          category_id: categoryId,
+          description,
+          spent_on: date,
+          payment_method: paymentMethod,
+          installments: paymentMethod === 'credit' ? installments : 1,
+        },
       });
-      toast(`${formatBRL(cents)} lançado em ${selected?.name ?? 'categoria'}`);
+
+      if (paymentMethod === 'credit' && installments > 1) {
+        toast(`${formatBRL(cents)} parcelado em ${installments}x de ${formatBRL(Math.round(cents / installments))}`);
+      } else {
+        toast(`${formatBRL(cents)} lançado em ${selected?.name ?? 'categoria'}`);
+      }
+
       setAmount('');
       setDescription('');
+      setPaymentMethod('debit');
+      setInstallments(1);
+
       if (date.slice(0, 7) !== month) setMonth(date.slice(0, 7));
       else await load();
     } catch (err) {
@@ -63,6 +91,22 @@ export default function Expenses() {
   }
 
   async function remove(exp: Expense) {
+    if (exp.installment_total > 1 && exp.installment_group_id) {
+      const deleteAll = confirm(
+        `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
+          `Deseja excluir TODAS as ${exp.installment_total} parcelas?\n\n` +
+          `[OK] = Excluir todas as parcelas\n[Cancelar] = Excluir apenas esta parcela`,
+      );
+      try {
+        await api(`/expenses/${exp.id}?all_installments=${deleteAll}`, { method: 'DELETE' });
+        toast(deleteAll ? 'Todas as parcelas foram excluídas' : 'Parcela excluída');
+        await load();
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      }
+      return;
+    }
+
     if (!confirm(`Excluir ${formatBRL(exp.amount_cents)} de ${exp.category_name}?`)) return;
     try {
       await api(`/expenses/${exp.id}`, { method: 'DELETE' });
@@ -80,7 +124,12 @@ export default function Expenses() {
   }, [expenses]);
 
   const selPct = selected ? percent(selected.spent_cents, selected.budget_cents) : 0;
-  const preview = selected ? selected.spent_cents + (parseBRL(amount) ?? 0) : 0;
+  const currentInstallmentValue = parseBRL(amount)
+    ? paymentMethod === 'credit' && installments > 1
+      ? Math.round(parseBRL(amount)! / installments)
+      : parseBRL(amount)!
+    : 0;
+  const preview = selected ? selected.spent_cents + currentInstallmentValue : 0;
 
   return (
     <div className="space-y-4">
@@ -100,6 +149,67 @@ export default function Expenses() {
                 placeholder="0,00"
                 className="w-full bg-transparent px-2 py-3 text-3xl font-bold tabular-nums outline-none placeholder:text-zinc-700"
               />
+            </div>
+          </div>
+
+          {/* Forma de Pagamento */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="block text-xs font-medium tracking-wide text-zinc-500 uppercase">
+                Forma de Pagamento
+              </label>
+              {paymentMethod === 'credit' && installments > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setIsInstallmentModalOpen(true)}
+                  className="text-xs font-semibold text-emerald-400 hover:underline"
+                >
+                  {installments}x {parseBRL(amount) ? `de ${formatBRL(Math.round(parseBRL(amount)! / installments))}` : ''} (alterar)
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => handleSelectPaymentMethod('debit')}
+                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
+                  paymentMethod === 'debit'
+                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+                }`}
+              >
+                <span>Débito</span>
+                <span className="text-[10px] font-normal text-zinc-500">À vista</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectPaymentMethod('pix')}
+                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
+                  paymentMethod === 'pix'
+                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+                }`}
+              >
+                <span>Pix</span>
+                <span className="text-[10px] font-normal text-zinc-500">Instantâneo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectPaymentMethod('credit')}
+                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
+                  paymentMethod === 'credit'
+                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+                }`}
+              >
+                <span>Crédito</span>
+                <span className="text-[10px] font-normal text-zinc-500">
+                  {installments > 1 ? `${installments}x parcelas` : '1x ou parcelar'}
+                </span>
+              </button>
             </div>
           </div>
 
@@ -145,7 +255,7 @@ export default function Expenses() {
                 <ProgressBar spent={selected.spent_cents} budget={selected.budget_cents} className="mt-2 h-1.5" />
                 {parseBRL(amount) ? (
                   <p className={`mt-2 text-xs ${preview > selected.budget_cents ? 'text-red-400' : 'text-zinc-500'}`}>
-                    Após este gasto: {formatBRL(preview)} ({percent(preview, selected.budget_cents)}%)
+                    Neste mês ({formatBRL(currentInstallmentValue)}): após o gasto ficará em {formatBRL(preview)} ({percent(preview, selected.budget_cents)}%)
                     {preview > selected.budget_cents && ' — vai estourar o teto!'}
                   </p>
                 ) : null}
@@ -163,10 +273,59 @@ export default function Expenses() {
             disabled={busy}
             className="w-full rounded-xl bg-emerald-400 py-3.5 font-semibold text-black transition hover:bg-emerald-300 active:scale-[0.99] disabled:opacity-60"
           >
-            {busy ? 'Salvando…' : 'Adicionar gasto'}
+            {busy ? 'Salvando…' : paymentMethod === 'credit' && installments > 1 ? `Lançar em ${installments}x no Cartão` : 'Adicionar gasto'}
           </button>
         </form>
       </Card>
+
+      {/* Pop-up Modal de Parcelas do Cartão */}
+      {isInstallmentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Número de Parcelas</h3>
+            <p className="mt-1 text-xs text-zinc-400">
+              {parseBRL(amount) ? `Valor total: ${formatBRL(parseBRL(amount)!)}` : 'Escolha a quantidade de vezes'}
+            </p>
+
+            <div className="mt-4 max-h-60 overflow-y-auto space-y-1.5 pr-1">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24].map((n) => {
+                const total = parseBRL(amount);
+                const perMonth = total ? Math.round(total / n) : 0;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => {
+                      setInstallments(n);
+                      setIsInstallmentModalOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-sm transition ${
+                      installments === n
+                        ? 'bg-emerald-400 text-black font-semibold'
+                        : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-850'
+                    }`}
+                  >
+                    <span>{n === 1 ? '1x à vista' : `${n}x vezes`}</span>
+                    {total ? (
+                      <span className={`text-xs tabular-nums ${installments === n ? 'text-black' : 'text-zinc-400'}`}>
+                        {formatBRL(perMonth)} /mês
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsInstallmentModalOpen(false)}
+              className="mt-4 w-full rounded-xl bg-zinc-900 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Lista de lançamentos */}
       <div className="flex items-center justify-between pt-2">
@@ -191,7 +350,18 @@ export default function Expenses() {
                 {items.map((exp) => (
                   <div key={exp.id} className="flex items-center gap-3 px-4 py-3">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{exp.category_name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate font-medium">{exp.category_name}</p>
+                        {exp.payment_method && (
+                          <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-800 uppercase">
+                            {exp.payment_method === 'credit'
+                              ? exp.installment_total > 1
+                                ? `Crédito ${exp.installment_current}/${exp.installment_total}`
+                                : 'Crédito'
+                              : exp.payment_method}
+                          </span>
+                        )}
+                      </div>
                       {exp.description && <p className="truncate text-sm text-zinc-500">{exp.description}</p>}
                     </div>
                     <span className="font-semibold tabular-nums">{formatBRL(exp.amount_cents)}</span>
@@ -199,6 +369,7 @@ export default function Expenses() {
                       onClick={() => remove(exp)}
                       className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400"
                       aria-label="Excluir"
+                      title="Excluir"
                     >
                       <IconTrash className="h-4 w-4" />
                     </button>
@@ -212,4 +383,3 @@ export default function Expenses() {
     </div>
   );
 }
-
