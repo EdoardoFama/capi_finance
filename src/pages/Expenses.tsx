@@ -14,6 +14,7 @@ export default function Expenses() {
   const [expenses, setExpenses] = useState<Expense[] | null>(null);
 
   const [amount, setAmount] = useState('');
+  const [title, setTitle] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(Number(params.get('categoria')) || null);
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayISO);
@@ -55,6 +56,7 @@ export default function Expenses() {
     e.preventDefault();
     const cents = parseBRL(amount);
     if (!cents) return toast('Informe um valor válido', 'error');
+    if (!title.trim()) return toast('Informe o título do gasto', 'error');
     if (!categoryId) return toast('Escolha uma categoria', 'error');
     setBusy(true);
     try {
@@ -63,7 +65,8 @@ export default function Expenses() {
         body: {
           amount_cents: cents,
           category_id: categoryId,
-          description,
+          title: title.trim(),
+          description: description.trim(),
           spent_on: date,
           payment_method: paymentMethod,
           installments: paymentMethod === 'credit' ? installments : 1,
@@ -77,6 +80,7 @@ export default function Expenses() {
       }
 
       setAmount('');
+      setTitle('');
       setDescription('');
       setPaymentMethod('debit');
       setInstallments(1);
@@ -263,10 +267,40 @@ export default function Expenses() {
             )}
           </div>
 
-          {/* Descrição e data */}
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-            <Input placeholder="Descrição (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} />
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required className="sm:w-44" />
+          {/* Título (obrigatório) e Descrição (opcional) */}
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium tracking-wide text-zinc-500 uppercase">
+                Título <span className="text-emerald-400">*</span>
+              </label>
+              <Input
+                placeholder="Ex: KFC, BK, Ifood, Posto, Mercado..."
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={120}
+                required
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <div>
+                <label className="mb-1 block text-xs font-medium tracking-wide text-zinc-500 uppercase">
+                  Descrição (opcional)
+                </label>
+                <Input
+                  placeholder="Ex: Frango, Pizza da Dominus, Hambúrguer..."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  maxLength={200}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium tracking-wide text-zinc-500 uppercase">
+                  Data
+                </label>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required className="sm:w-44" />
+              </div>
+            </div>
           </div>
 
           <button
@@ -351,7 +385,10 @@ export default function Expenses() {
                   <div key={exp.id} className="flex items-center gap-3 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="truncate font-medium">{exp.category_name}</p>
+                        <p className="truncate font-semibold text-zinc-100">{exp.title || exp.category_name}</p>
+                        <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400 border border-zinc-800">
+                          {exp.category_name}
+                        </span>
                         {exp.payment_method && (
                           <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-800 uppercase">
                             {exp.payment_method === 'credit'
@@ -362,7 +399,7 @@ export default function Expenses() {
                           </span>
                         )}
                       </div>
-                      {exp.description && <p className="truncate text-sm text-zinc-500">{exp.description}</p>}
+                      {exp.description && <p className="truncate text-xs text-zinc-400 mt-0.5">{exp.description}</p>}
                     </div>
                     <span className="font-semibold tabular-nums">{formatBRL(exp.amount_cents)}</span>
                     <button

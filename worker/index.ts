@@ -246,7 +246,7 @@ app.delete('/categories/:id', async (c) => {
 
 // ---------- lançamentos (expenses) ----------
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
-  e.description, e.spent_on, e.payment_method, e.installment_current, e.installment_total,
+  e.title, e.description, e.spent_on, e.payment_method, e.installment_current, e.installment_total,
   e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id`;
 
 function addMonthsToDate(isoDate: string, monthsToAdd: number): string {
@@ -285,6 +285,7 @@ app.post('/expenses', async (c) => {
   const uid = c.get('userId');
   const categoryId = cents(data.category_id, 'categoria', { min: 1 })!;
   const amount = cents(data.amount_cents, 'valor', { min: 1 })!;
+  const title = str(data.title, 'título', { required: true, max: 120 })!;
   const description = str(data.description ?? '', 'descrição', { required: false, max: 200 }) ?? '';
   const spentOn = str(data.spent_on, 'data')!;
   if (!isDate(spentOn)) bad('Data inválida');
@@ -301,10 +302,10 @@ app.post('/expenses', async (c) => {
 
   if (installments === 1) {
     const { id } = (await c.env.DB.prepare(
-      `INSERT INTO expenses (user_id, category_id, amount_cents, description, spent_on, payment_method, installment_current, installment_total)
-       VALUES (?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
+      `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, installment_current, installment_total)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
     )
-      .bind(uid, categoryId, amount, description, spentOn, paymentMethod)
+      .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod)
       .first<{ id: number }>())!;
     const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
     return c.json(row, 201);
@@ -321,9 +322,9 @@ app.post('/expenses', async (c) => {
     const installmentDate = addMonthsToDate(spentOn, i - 1);
     statements.push(
       c.env.DB.prepare(
-        `INSERT INTO expenses (user_id, category_id, amount_cents, description, spent_on, payment_method, installment_current, installment_total, installment_group_id)
-         VALUES (?, ?, ?, ?, ?, 'credit', ?, ?, ?)`,
-      ).bind(uid, categoryId, installmentAmount, description, installmentDate, i, installments, groupId),
+        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, installment_current, installment_total, installment_group_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'credit', ?, ?, ?)`,
+      ).bind(uid, categoryId, installmentAmount, title, description, installmentDate, i, installments, groupId),
     );
   }
 
@@ -343,16 +344,17 @@ app.put('/expenses/:id', async (c) => {
   const uid = c.get('userId');
   const categoryId = cents(data.category_id, 'categoria', { required: false, min: 1 });
   const amount = cents(data.amount_cents, 'valor', { required: false, min: 1 });
+  const title = str(data.title, 'título', { required: false, max: 120 });
   const description = str(data.description, 'descrição', { required: false, max: 200 });
   const spentOn = str(data.spent_on, 'data', { required: false });
   if (spentOn !== undefined && !isDate(spentOn)) bad('Data inválida');
   if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
   const updated = await c.env.DB.prepare(
     `UPDATE expenses SET category_id = COALESCE(?, category_id), amount_cents = COALESCE(?, amount_cents),
-     description = COALESCE(?, description), spent_on = COALESCE(?, spent_on)
+     title = COALESCE(?, title), description = COALESCE(?, description), spent_on = COALESCE(?, spent_on)
      WHERE id = ? AND user_id = ? RETURNING id`,
   )
-    .bind(categoryId ?? null, amount ?? null, description ?? null, spentOn ?? null, id, uid)
+    .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, id, uid)
     .first();
   if (!updated) bad('Lançamento não encontrado', 404);
   const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();

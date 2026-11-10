@@ -181,6 +181,7 @@ export default function History() {
                   <div key={exp.id} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-900/40 transition">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-sm text-zinc-100">{exp.title || exp.category_name}</p>
                         <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-zinc-800">
                           {exp.category_name}
                         </span>
@@ -193,10 +194,10 @@ export default function History() {
                               : exp.payment_method}
                           </span>
                         )}
-                        {exp.description && (
-                          <p className="truncate text-sm text-zinc-300 font-normal">{exp.description}</p>
-                        )}
                       </div>
+                      {exp.description && (
+                        <p className="truncate text-xs text-zinc-400 mt-0.5 font-normal">{exp.description}</p>
+                      )}
                     </div>
                     <span className="font-semibold text-base tabular-nums text-white">
                       {formatBRL(exp.amount_cents)}

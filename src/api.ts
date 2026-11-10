@@ -33,6 +33,7 @@ export type Expense = {
   category_id: number;
   category_name: string;
   amount_cents: number;
+  title: string;
   description: string;
   spent_on: string;
   payment_method: PaymentMethod;
