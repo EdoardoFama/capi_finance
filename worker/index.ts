@@ -137,9 +137,10 @@ app.post('/auth/signup/request', async (c) => {
           </div>
         `,
       });
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Falha ao enviar e-mail:', err);
-      bad('Não foi possível enviar o e-mail de confirmação. Verifique os dados ou tente novamente.');
+      const msg = err instanceof Error ? err.message : String(err);
+      bad(`Não foi possível enviar o e-mail de confirmação: ${msg}`);
     }
   }
 

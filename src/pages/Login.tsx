@@ -5,6 +5,59 @@ import { Input } from '../components/ui';
 
 type Mode = 'login' | 'signup_data' | 'signup_otp' | 'forgot_email' | 'forgot_otp';
 
+function PasswordField({
+  value,
+  onChange,
+  placeholder = 'Senha',
+  label,
+  required = true,
+  autoComplete,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  label?: string;
+  required?: boolean;
+  autoComplete?: string;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div>
+      {label && <label className="text-[11px] text-zinc-400 uppercase font-semibold block mb-1">{label}</label>}
+      <div className="relative">
+        <Input
+          type={show ? 'text' : 'password'}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="pr-11"
+          required={required}
+        />
+        <button
+          type="button"
+          onClick={() => setShow((prev) => !prev)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-200 transition"
+          aria-label={show ? 'Ocultar senha' : 'Ver senha'}
+          tabIndex={-1}
+        >
+          {show ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+              <line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Login() {
   const { setUser } = useAuth();
   const toast = useToast();
@@ -15,9 +68,10 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -40,6 +94,16 @@ export default function Login() {
   async function requestSignupOtp(e: FormEvent) {
     e.preventDefault();
     setError('');
+
+    if (password.length < 6) {
+      setError('A senha deve ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('As senhas não coincidem. Digite a mesma senha nos dois campos.');
+      return;
+    }
+
     setLoading(true);
     try {
       await api('/auth/signup/request', {
@@ -97,6 +161,16 @@ export default function Login() {
   async function confirmResetPassword(e: FormEvent) {
     e.preventDefault();
     setError('');
+
+    if (newPassword.length < 6) {
+      setError('A nova senha deve ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError('As senhas não coincidem. Digite a mesma senha nos dois campos.');
+      return;
+    }
+
     setLoading(true);
     try {
       await api('/auth/password/reset', {
@@ -106,8 +180,10 @@ export default function Login() {
       toast('Senha redefinida com sucesso!');
       setMode('login');
       setPassword('');
+      setConfirmPassword('');
       setOtpCode('');
       setNewPassword('');
+      setConfirmNewPassword('');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -147,35 +223,13 @@ export default function Login() {
                 required
               />
             </div>
-            <div className="relative">
-              <Input
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Senha"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="pr-11"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-zinc-200"
-                aria-label={showPassword ? 'Ocultar senha' : 'Ver senha'}
-              >
-                {showPassword ? (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                )}
-              </button>
-            </div>
+
+            <PasswordField
+              placeholder="Senha"
+              autoComplete="current-password"
+              value={password}
+              onChange={setPassword}
+            />
 
             <div className="flex justify-end">
               <button
@@ -241,16 +295,19 @@ export default function Login() {
               />
             </div>
 
-            <div>
-              <label className="text-[11px] text-zinc-400 uppercase font-semibold block mb-1">Senha</label>
-              <Input
-                type="password"
-                placeholder="Mínimo 6 caracteres"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
+            <PasswordField
+              label="Senha"
+              placeholder="Mínimo 6 caracteres"
+              value={password}
+              onChange={setPassword}
+            />
+
+            <PasswordField
+              label="Confirmar Senha"
+              placeholder="Digite a senha novamente"
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+            />
 
             {error && <p className="text-xs text-red-400">{error}</p>}
 
@@ -389,16 +446,19 @@ export default function Login() {
               />
             </div>
 
-            <div>
-              <label className="text-[11px] text-zinc-400 uppercase font-semibold block mb-1">Nova senha</label>
-              <Input
-                type="password"
-                placeholder="Mínimo 6 caracteres"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-              />
-            </div>
+            <PasswordField
+              label="Nova Senha"
+              placeholder="Mínimo 6 caracteres"
+              value={newPassword}
+              onChange={setNewPassword}
+            />
+
+            <PasswordField
+              label="Confirmar Nova Senha"
+              placeholder="Digite a nova senha novamente"
+              value={confirmNewPassword}
+              onChange={setConfirmNewPassword}
+            />
 
             {error && <p className="text-xs text-red-400">{error}</p>}
 
