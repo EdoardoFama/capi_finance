@@ -4,10 +4,30 @@ import { api, type Category, type Expense } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import { Card, IconPlus, IconTrash, MonthPicker, PageTitle, Spinner } from '../components/ui';
+import { exportCsv, exportPdf, fetchExportData } from '../export';
 
 export default function History() {
   const { month } = useMonth();
   const toast = useToast();
+
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportScope, setExportScope] = useState<string>('all');
+  const [exporting, setExporting] = useState(false);
+
+  async function runExport(kind: 'csv' | 'pdf') {
+    setExporting(true);
+    try {
+      const data = await fetchExportData();
+      if (kind === 'csv') exportCsv(data, exportScope);
+      else await exportPdf(data, exportScope);
+      toast(`Arquivo ${kind.toUpperCase()} gerado`);
+      setExportOpen(false);
+    } catch (err) {
+      toast((err as Error).message || 'Falha ao exportar', 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const [expenses, setExpenses] = useState<Expense[] | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -90,13 +110,81 @@ export default function History() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <PageTitle title="Extrato de Gastos" subtitle={`Histórico detalhado de ${monthLabel(month)}`} />
-        <Link
-          to="/lancar"
-          className="flex items-center gap-1.5 rounded-xl bg-emerald-400 px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-emerald-300"
-        >
-          <IconPlus className="h-4 w-4" /> Novo
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExportOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800"
+            title="Exportar dados (PDF ou CSV)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+            </svg>
+            Exportar
+          </button>
+          <Link
+            to="/lancar"
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-400 px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-emerald-300"
+          >
+            <IconPlus className="h-4 w-4" /> Novo
+          </Link>
+        </div>
       </div>
+
+      {exportOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Exportar dados</h3>
+            <p className="mt-1 text-xs text-zinc-400">
+              Inclui ganhos, tetos por categoria, gastos (com parcelas) e investimentos. Ideal para análise por IA.
+            </p>
+
+            <label className="mt-4 mb-1.5 block text-xs font-medium tracking-wide text-zinc-500 uppercase">Gastos do período</label>
+            <div className="grid grid-cols-2 gap-2">
+              {([['all', 'Todos os meses'], [month, monthLabel(month)]] as const).map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setExportScope(val)}
+                  className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                    exportScope === val
+                      ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
+                      : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                disabled={exporting}
+                onClick={() => runExport('csv')}
+                className="rounded-xl bg-emerald-400 py-3 text-sm font-semibold text-black hover:bg-emerald-300 disabled:opacity-60"
+              >
+                {exporting ? 'Gerando…' : 'CSV'}
+                <span className="block text-[10px] font-normal opacity-70">melhor p/ IA e planilhas</span>
+              </button>
+              <button
+                disabled={exporting}
+                onClick={() => runExport('pdf')}
+                className="rounded-xl bg-zinc-800 py-3 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-60"
+              >
+                {exporting ? 'Gerando…' : 'PDF'}
+                <span className="block text-[10px] font-normal opacity-70">relatório para leitura</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setExportOpen(false)}
+              className="mt-3 w-full rounded-xl bg-zinc-900 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
 
       <MonthPicker />
 

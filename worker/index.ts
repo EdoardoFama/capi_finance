@@ -476,4 +476,33 @@ app.post('/investments/accounts', async (c) => {
   return c.json(row, 201);
 });
 
+// ---------- export (todos os dados do usuário) ----------
+app.get('/export', async (c) => {
+  const uid = c.get('userId');
+  const db = c.env.DB;
+  const [incomes, categories, expenses, accounts, snapshots] = await db.batch([
+    db.prepare('SELECT name, amount_cents FROM incomes WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
+    db.prepare('SELECT name, budget_cents, note FROM categories WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
+    db.prepare(
+      `SELECT e.spent_on, e.title, e.description, c.name AS category, e.amount_cents, e.payment_method,
+              e.installment_current, e.installment_total
+       FROM expenses e JOIN categories c ON c.id = e.category_id
+       WHERE e.user_id = ? ORDER BY e.spent_on, e.id`,
+    ).bind(uid),
+    db.prepare('SELECT id, name FROM investment_accounts WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
+    db.prepare(
+      'SELECT account_id, month, balance_cents, delta_cents FROM investment_snapshots WHERE user_id = ? ORDER BY month',
+    ).bind(uid),
+  ]);
+  return c.json({
+    generated_at: new Date().toISOString(),
+    user: c.get('username'),
+    incomes: incomes.results,
+    categories: categories.results,
+    expenses: expenses.results,
+    investment_accounts: accounts.results,
+    investment_snapshots: snapshots.results,
+  });
+});
+
 export default app;
