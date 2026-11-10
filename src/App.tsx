@@ -7,6 +7,7 @@ import Budget from './pages/Budget';
 import Expenses from './pages/Expenses';
 import History from './pages/History';
 import Investments from './pages/Investments';
+import Admin from './pages/Admin';
 
 export default function App() {
   const { user } = useAuth();
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="lancar" element={<Expenses />} />
         <Route path="extrato" element={<History />} />
         <Route path="investimentos" element={<Investments />} />
+        {user.is_admin && <Route path="admin" element={<Admin />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { randomToken, sha256, verifyPassword } from './auth';
+import { randomToken, sha256, verifyPassword, hashPassword } from './auth';
+import { sendEmail } from './mailer';
 
-type Env = { DB: D1Database; ASSETS: Fetcher };
-type Vars = { userId: number; username: string; sessionId: string };
+type Env = { DB: D1Database; ASSETS: Fetcher; SMTP_USER?: string; SMTP_PASS?: string };
+type Vars = { userId: number; username: string; sessionId: string; isAdmin: boolean };
 type AppEnv = { Bindings: Env; Variables: Vars };
 
 const SESSION_COOKIE = 'capi_session';
@@ -13,9 +14,9 @@ const SESSION_DAYS = 30;
 const app = new Hono<AppEnv>().basePath('/api');
 
 // ---------- helpers ----------
-const bad = (message: string, status: 400 | 401 | 404 | 409 = 400): never => {
+function bad(message: string, status: 400 | 401 | 403 | 404 | 409 = 400): never {
   throw new HTTPException(status, { message });
-};
+}
 
 async function body(c: { req: { json: () => Promise<unknown> } }) {
   const data = await c.req.json().catch(() => null);
@@ -73,17 +74,266 @@ app.onError((err, c) => {
 app.notFound((c) => c.json({ error: 'Rota não encontrada' }, 404));
 
 // ---------- auth ----------
-app.post('/auth/login', async (c) => {
+function generateOTP(): string {
+  const arr = crypto.getRandomValues(new Uint32Array(1));
+  return String(100000 + (arr[0] % 900000));
+}
+
+// 1. Iniciar Cadastro: gera OTP e envia por e-mail
+app.post('/auth/signup/request', async (c) => {
   const data = await body(c);
   const username = str(data.username, 'usuário')!.toLowerCase();
+  const email = str(data.email, 'e-mail')!.toLowerCase();
   const password = typeof data.password === 'string' ? data.password : '';
 
-  const user = await c.env.DB.prepare('SELECT id, username, password_hash FROM users WHERE username = ?')
-    .bind(username)
-    .first<{ id: number; username: string; password_hash: string }>();
+  if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(username)) {
+    bad('Usuário deve ter entre 3 e 30 caracteres alfanuméricos');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    bad('E-mail inválido');
+  }
+  if (password.length < 6) {
+    bad('A senha deve ter no mínimo 6 caracteres');
+  }
+
+  // Verifica se username ou email já existem
+  const existing = await c.env.DB.prepare('SELECT username, email FROM users WHERE username = ? OR email = ?')
+    .bind(username, email)
+    .first<{ username: string; email: string }>();
+
+  if (existing) {
+    if (existing.username === username) bad('Nome de usuário já cadastrado', 409);
+    if (existing.email === email) bad('E-mail já cadastrado', 409);
+  }
+
+  const code = generateOTP();
+  const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutos
+  const passwordHash = await hashPassword(password);
+  const payload = JSON.stringify({ username, password_hash: passwordHash });
+
+  // Salva no banco
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ? AND type = "signup"').bind(email),
+    c.env.DB.prepare('INSERT INTO verification_codes (email, code, type, payload, expires_at) VALUES (?, ?, "signup", ?, ?)')
+      .bind(email, code, payload, expiresAt),
+  ]);
+
+  // Enviar e-mail
+  if (c.env.SMTP_USER && c.env.SMTP_PASS) {
+    try {
+      await sendEmail({
+        to: email,
+        subject: `Seu código de confirmação: ${code}`,
+        smtpUser: c.env.SMTP_USER,
+        smtpPass: c.env.SMTP_PASS,
+        html: `
+          <div style="font-family: sans-serif; background-color: #000; color: #fff; padding: 30px; border-radius: 12px; max-width: 480px; margin: auto;">
+            <h2 style="color: #34d399; margin-top: 0;">Bem-vindo ao Capi Finance!</h2>
+            <p>Seu código de verificação para ativar sua conta é:</p>
+            <div style="background-color: #18181b; padding: 16px; border-radius: 8px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #34d399; margin: 24px 0;">
+              ${code}
+            </div>
+            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos. Se você não solicitou este cadastro, desconsidere esta mensagem.</p>
+          </div>
+        `,
+      });
+    } catch (err) {
+      console.error('Falha ao enviar e-mail:', err);
+      bad('Não foi possível enviar o e-mail de confirmação. Verifique os dados ou tente novamente.');
+    }
+  }
+
+  return c.json({ ok: true, message: 'Código enviado para seu e-mail!' });
+});
+
+// 2. Confirmar Cadastro com o código OTP
+app.post('/auth/signup/confirm', async (c) => {
+  const data = await body(c);
+  const email = str(data.email, 'e-mail')!.toLowerCase();
+  const code = str(data.code, 'código')!.trim();
+
+  const record = await c.env.DB.prepare(
+    'SELECT payload FROM verification_codes WHERE email = ? AND code = ? AND type = "signup" AND expires_at > ?',
+  )
+    .bind(email, code, Date.now())
+    .first<{ payload: string }>();
+
+  if (!record) {
+    bad('Código inválido ou expirado', 400);
+  }
+
+  const { username, password_hash } = JSON.parse((record as { payload: string }).payload);
+
+  // Insere o novo usuário ativo
+  const { id: newUserId } = (await c.env.DB.prepare(
+    'INSERT INTO users (username, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, 1, 0) RETURNING id',
+  )
+    .bind(username, email, password_hash)
+    .first<{ id: number }>())!;
+
+  // Cria o orçamento padrão para o novo usuário
+  const defaultIncomes = [
+    ['SALÁRIO', 500000],
+    ['OUTROS', 50000],
+  ];
+  const defaultCategories = [
+    ['FEIRA', 100000],
+    ['LANCHE/ETC', 30000],
+    ['CARRO', 50000],
+    ['CASA', 80000],
+    ['FARMÁCIA', 15000],
+    ['OUTROS', 20000],
+  ];
+
+  const batchStmts: D1PreparedStatement[] = [
+    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email),
+  ];
+
+  defaultIncomes.forEach(([name, centsVal], i) => {
+    batchStmts.push(
+      c.env.DB.prepare('INSERT INTO incomes (user_id, name, amount_cents, sort_order) VALUES (?, ?, ?, ?)').bind(
+        newUserId,
+        name,
+        centsVal,
+        i + 1,
+      ),
+    );
+  });
+
+  defaultCategories.forEach(([name, centsVal], i) => {
+    batchStmts.push(
+      c.env.DB.prepare('INSERT INTO categories (user_id, name, budget_cents, note, sort_order) VALUES (?, ?, ?, "", ?)').bind(
+        newUserId,
+        name,
+        centsVal,
+        i + 1,
+      ),
+    );
+  });
+
+  await c.env.DB.batch(batchStmts);
+
+  // Cria sessão e autentica direto
+  const token = randomToken();
+  const expires = Date.now() + SESSION_DAYS * 86_400_000;
+  await c.env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').bind(
+    await sha256(token),
+    newUserId,
+    expires,
+  ).run();
+
+  setCookie(c, SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: SESSION_DAYS * 86_400,
+  });
+
+  return c.json({ id: newUserId, username, email, is_admin: false });
+});
+
+// 3. Esqueci Minha Senha: pede envio de código
+app.post('/auth/password/request', async (c) => {
+  const data = await body(c);
+  const email = str(data.email, 'e-mail')!.toLowerCase();
+
+  const user = await c.env.DB.prepare('SELECT id, username FROM users WHERE email = ? AND is_active = 1')
+    .bind(email)
+    .first<{ id: number; username: string }>();
+
+  if (!user) {
+    // Por segurança não revelamos se existe ou não, mas retornamos ok
+    return c.json({ ok: true, message: 'Se o e-mail estiver cadastrado, o código foi enviado.' });
+  }
+
+  const code = generateOTP();
+  const expiresAt = Date.now() + 15 * 60 * 1000;
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ? AND type = "reset_password"').bind(email),
+    c.env.DB.prepare('INSERT INTO verification_codes (email, code, type, payload, expires_at) VALUES (?, ?, "reset_password", ?, ?)')
+      .bind(email, code, String(user.id), expiresAt),
+  ]);
+
+  if (c.env.SMTP_USER && c.env.SMTP_PASS) {
+    try {
+      await sendEmail({
+        to: email,
+        subject: `Recuperação de Senha - Capi Finance: ${code}`,
+        smtpUser: c.env.SMTP_USER,
+        smtpPass: c.env.SMTP_PASS,
+        html: `
+          <div style="font-family: sans-serif; background-color: #000; color: #fff; padding: 30px; border-radius: 12px; max-width: 480px; margin: auto;">
+            <h2 style="color: #34d399; margin-top: 0;">Recuperação de Senha</h2>
+            <p>Olá, <b>${user.username}</b>. Você solicitou a redefinição da sua senha.</p>
+            <p>Use o código abaixo para cadastrar uma nova senha:</p>
+            <div style="background-color: #18181b; padding: 16px; border-radius: 8px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #34d399; margin: 24px 0;">
+              ${code}
+            </div>
+            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos. Se não foi você, ignore.</p>
+          </div>
+        `,
+      });
+    } catch (err) {
+      console.error('Falha ao enviar e-mail de reset:', err);
+    }
+  }
+
+  return c.json({ ok: true, message: 'Código de recuperação enviado para o e-mail!' });
+});
+
+// 4. Redefinir Senha com o código
+app.post('/auth/password/reset', async (c) => {
+  const data = await body(c);
+  const email = str(data.email, 'e-mail')!.toLowerCase();
+  const code = str(data.code, 'código')!.trim();
+  const newPassword = typeof data.new_password === 'string' ? data.new_password : '';
+
+  if (newPassword.length < 6) {
+    bad('A nova senha deve ter no mínimo 6 caracteres');
+  }
+
+  const record = await c.env.DB.prepare(
+    'SELECT payload FROM verification_codes WHERE email = ? AND code = ? AND type = "reset_password" AND expires_at > ?',
+  )
+    .bind(email, code, Date.now())
+    .first<{ payload: string }>();
+
+  if (!record) {
+    bad('Código de recuperação inválido ou expirado', 400);
+  }
+
+  const userId = Number(record.payload);
+  const newHash = await hashPassword(newPassword);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, userId),
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId), // desconecta outras sessões
+    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email),
+  ]);
+
+  return c.json({ ok: true, message: 'Senha atualizada com sucesso! Faça login.' });
+});
+
+// 5. Login
+app.post('/auth/login', async (c) => {
+  const data = await body(c);
+  const loginInput = str(data.username, 'usuário ou e-mail')!.toLowerCase();
+  const password = typeof data.password === 'string' ? data.password : '';
+
+  const user = await c.env.DB.prepare(
+    'SELECT id, username, email, password_hash, is_active, is_admin FROM users WHERE username = ? OR email = ?',
+  )
+    .bind(loginInput, loginInput)
+    .first<{ id: number; username: string; email: string; password_hash: string; is_active: number; is_admin: number }>();
 
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     return c.json({ error: 'Usuário ou senha inválidos' }, 401);
+  }
+
+  if (user.is_active === 0) {
+    return c.json({ error: 'Sua conta está bloqueada pelo administrador.' }, 403);
   }
 
   const token = randomToken();
@@ -104,33 +354,92 @@ app.post('/auth/login', async (c) => {
     path: '/',
     maxAge: SESSION_DAYS * 86_400,
   });
-  return c.json({ id: user.id, username: user.username });
+  return c.json({ id: user.id, username: user.username, email: user.email, is_admin: user.is_admin === 1 });
 });
 
-// Tudo abaixo exige sessão válida
+// Middleware de autenticação
 app.use('*', async (c, next) => {
-  if (c.req.path === '/api/auth/login') return next();
+  if (
+    c.req.path === '/api/auth/login' ||
+    c.req.path === '/api/auth/signup/request' ||
+    c.req.path === '/api/auth/signup/confirm' ||
+    c.req.path === '/api/auth/password/request' ||
+    c.req.path === '/api/auth/password/reset'
+  ) {
+    return next();
+  }
+
   const token = getCookie(c, SESSION_COOKIE);
   if (!token) return c.json({ error: 'Não autenticado' }, 401);
   const sessionId = await sha256(token);
   const row = await c.env.DB.prepare(
-    `SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id
+    `SELECT u.id, u.username, u.is_active, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id = ? AND s.expires_at > ?`,
   )
     .bind(sessionId, Date.now())
-    .first<{ id: number; username: string }>();
-  if (!row) return c.json({ error: 'Sessão expirada' }, 401);
+    .first<{ id: number; username: string; is_active: number; is_admin: number }>();
+
+  if (!row || row.is_active === 0) return c.json({ error: 'Sessão inválida ou conta bloqueada' }, 401);
+
   c.set('userId', row.id);
   c.set('username', row.username);
   c.set('sessionId', sessionId);
+  c.set('isAdmin', row.is_admin === 1);
   await next();
 });
 
-app.get('/auth/me', (c) => c.json({ id: c.get('userId'), username: c.get('username') }));
+app.get('/auth/me', async (c) => {
+  const user = await c.env.DB.prepare('SELECT id, username, email, is_admin FROM users WHERE id = ?')
+    .bind(c.get('userId'))
+    .first<{ id: number; username: string; email: string; is_admin: number }>();
+  return c.json({
+    id: user?.id,
+    username: user?.username,
+    email: user?.email,
+    is_admin: user?.is_admin === 1,
+  });
+});
 
 app.post('/auth/logout', async (c) => {
   await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(c.get('sessionId')).run();
   deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
+  return c.json({ ok: true });
+});
+
+// ---------- PAINEL EXCLUSIVO DE ADMIN (apenas edoardofama / is_admin = 1) ----------
+app.get('/admin/users', async (c) => {
+  if (!c.get('isAdmin')) bad('Acesso negado: apenas o administrador pode acessar esta área', 403);
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, username, email, is_active, is_admin, created_at FROM users ORDER BY id ASC',
+  ).all();
+  return c.json(results);
+});
+
+app.post('/admin/users/:id/toggle-status', async (c) => {
+  if (!c.get('isAdmin')) bad('Acesso negado', 403);
+  const targetId = idParam(c.req.param('id'));
+  if (targetId === c.get('userId')) bad('Você não pode bloquear sua própria conta de admin', 400);
+
+  const target = await c.env.DB.prepare('SELECT is_active FROM users WHERE id = ?')
+    .bind(targetId)
+    .first<{ is_active: number }>();
+  if (!target) bad('Usuário não encontrado', 404);
+
+  const newStatus = target.is_active === 1 ? 0 : 1;
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET is_active = ? WHERE id = ?').bind(newStatus, targetId),
+    ...(newStatus === 0 ? [c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId)] : []),
+  ]);
+
+  return c.json({ id: targetId, is_active: newStatus });
+});
+
+app.delete('/admin/users/:id', async (c) => {
+  if (!c.get('isAdmin')) bad('Acesso negado', 403);
+  const targetId = idParam(c.req.param('id'));
+  if (targetId === c.get('userId')) bad('Você não pode excluir sua própria conta de admin', 400);
+
+  await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(targetId).run();
   return c.json({ ok: true });
 });
 

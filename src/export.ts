@@ -210,3 +210,4 @@ export async function exportPdf(full: ExportData, scope: ExportScope) {
 
   download(doc.output('blob'), `${stamp(data, scope)}.pdf`);
 }
+

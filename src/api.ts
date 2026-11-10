@@ -23,7 +23,21 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   return data as T;
 }
 
-export type User = { id: number; username: string };
+export type User = {
+  id: number;
+  username: string;
+  email?: string;
+  is_admin: boolean;
+};
+
+export type AdminUser = {
+  id: number;
+  username: string;
+  email: string | null;
+  is_active: number;
+  is_admin: number;
+  created_at: string;
+};
 export type Income = { id: number; name: string; amount_cents: number; sort_order: number };
 export type Category = { id: number; name: string; budget_cents: number; note: string; sort_order: number };
 export type PaymentMethod = 'debit' | 'pix' | 'credit';

@@ -20,3 +20,4 @@ CREATE TABLE IF NOT EXISTS investment_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_inv_snapshots_user_month ON investment_snapshots(user_id, month);
+

@@ -38,9 +38,30 @@ export default function Layout() {
                 {label}
               </NavLink>
             ))}
+            {user?.is_admin && (
+              <NavLink
+                to="/admin"
+                className={({ isActive }) =>
+                  `rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                    isActive ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'text-emerald-400/80 hover:text-emerald-300'
+                  }`
+                }
+              >
+                Admin
+              </NavLink>
+            )}
           </nav>
 
           <div className="flex items-center gap-2">
+            {user?.is_admin && (
+              <NavLink
+                to="/admin"
+                className="md:hidden rounded-lg p-1.5 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                title="Painel Admin"
+              >
+                Admin
+              </NavLink>
+            )}
             <span className="hidden text-sm text-zinc-500 sm:inline">{user?.username}</span>
             <button
               onClick={() => confirm('Sair da conta?') && logout()}
