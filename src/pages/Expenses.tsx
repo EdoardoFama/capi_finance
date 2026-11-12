@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
-import { api, type Dashboard, type Expense, type PaymentMethod } from '../api';
+import { api, type Dashboard, type Expense, type PaymentMethod, type AccountId, ACCOUNT_DEFINITIONS } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, parseBRL, percent, todayISO } from '../format';
 import { Card, IconTrash, Input, MonthPicker, PageTitle, ProgressBar, Spinner, textColor } from '../components/ui';
@@ -18,7 +18,14 @@ export default function Expenses() {
   const [categoryId, setCategoryId] = useState<number | null>(Number(params.get('categoria')) || null);
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayISO);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debit');
+  const [accountId, setAccountId] = useState<AccountId>(
+    (params.get('conta') as AccountId) && ['nubank', 'pluxe_alimentacao', 'pluxe_refeicao', 'alelo'].includes(params.get('conta') as string)
+      ? (params.get('conta') as AccountId)
+      : 'nubank',
+  );
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
+    params.get('conta') && params.get('conta') !== 'nubank' ? 'voucher' : 'debit',
+  );
   const [installments, setInstallments] = useState(1);
   const [isInstallmentModalOpen, setIsInstallmentModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -38,7 +45,9 @@ export default function Expenses() {
   }, [load, toast]);
 
   useEffect(() => {
-    if (params.has('categoria')) setParams({}, { replace: true });
+    if (params.has('categoria') || params.has('conta')) {
+      setParams({}, { replace: true });
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = dash?.categories.find((c) => c.id === categoryId);
@@ -68,21 +77,25 @@ export default function Expenses() {
           title: title.trim(),
           description: description.trim(),
           spent_on: date,
+          account_id: accountId,
           payment_method: paymentMethod,
-          installments: paymentMethod === 'credit' ? installments : 1,
+          installments: accountId === 'nubank' && paymentMethod === 'credit' ? installments : 1,
         },
       });
 
-      if (paymentMethod === 'credit' && installments > 1) {
+      const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === accountId);
+      if (accountId === 'nubank' && paymentMethod === 'credit' && installments > 1) {
         toast(`${formatBRL(cents)} parcelado em ${installments}x de ${formatBRL(Math.round(cents / installments))}`);
       } else {
-        toast(`${formatBRL(cents)} lançado em ${selected?.name ?? 'categoria'}`);
+        toast(`${formatBRL(cents)} lançado (${accInfo?.name ?? 'Conta'})`);
       }
 
       setAmount('');
       setTitle('');
       setDescription('');
-      setPaymentMethod('debit');
+      if (accountId === 'nubank') {
+        setPaymentMethod('debit');
+      }
       setInstallments(1);
 
       if (date.slice(0, 7) !== month) setMonth(date.slice(0, 7));
@@ -156,13 +169,13 @@ export default function Expenses() {
             </div>
           </div>
 
-          {/* Forma de Pagamento */}
+          {/* Conta e Forma de Pagamento */}
           <div>
             <div className="mb-2 flex items-center justify-between">
               <label className="block text-xs font-medium tracking-wide text-zinc-500 uppercase">
-                Forma de Pagamento
+                Forma de Pagamento (Abater do Saldo)
               </label>
-              {paymentMethod === 'credit' && installments > 1 && (
+              {accountId === 'nubank' && paymentMethod === 'credit' && installments > 1 && (
                 <button
                   type="button"
                   onClick={() => setIsInstallmentModalOpen(true)}
@@ -173,48 +186,87 @@ export default function Expenses() {
               )}
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleSelectPaymentMethod('debit')}
-                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
-                  paymentMethod === 'debit'
-                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <span>Débito</span>
-                <span className="text-[10px] font-normal text-zinc-500">À vista</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSelectPaymentMethod('pix')}
-                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
-                  paymentMethod === 'pix'
-                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <span>Pix</span>
-                <span className="text-[10px] font-normal text-zinc-500">Instantâneo</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSelectPaymentMethod('credit')}
-                className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-semibold transition ${
-                  paymentMethod === 'credit'
-                    ? 'border-emerald-400 bg-emerald-400/10 text-emerald-300'
-                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <span>Crédito</span>
-                <span className="text-[10px] font-normal text-zinc-500">
-                  {installments > 1 ? `${installments}x parcelas` : '1x ou parcelar'}
-                </span>
-              </button>
+            {/* 4 Mostradores/Botões de Conta */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {ACCOUNT_DEFINITIONS.map((acc) => {
+                const active = accountId === acc.id;
+                const accBalance = dash?.accounts?.find((a) => a.account_id === acc.id);
+                return (
+                  <button
+                    type="button"
+                    key={acc.id}
+                    onClick={() => {
+                      setAccountId(acc.id);
+                      if (acc.id !== 'nubank') {
+                        setPaymentMethod('voucher');
+                        setInstallments(1);
+                      } else if (paymentMethod === 'voucher') {
+                        setPaymentMethod('debit');
+                      }
+                    }}
+                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 text-xs font-semibold transition ${
+                      active
+                        ? `${acc.badgeClass} ring-1 ring-current border-current`
+                        : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
+                      <span className="font-bold text-[11px] sm:text-xs">{acc.name}</span>
+                    </div>
+                    <span className="mt-1 text-[10px] font-normal text-zinc-400">
+                      {accBalance ? `Saldo: ${formatBRL(accBalance.current_cents)}` : ''}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
+
+            {/* Sub-opções se a conta for Nubank */}
+            {accountId === 'nubank' && (
+              <div className="mt-2.5 grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('debit')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2 text-xs font-semibold transition ${
+                    paymentMethod === 'debit'
+                      ? 'border-purple-400 bg-purple-500/10 text-purple-300'
+                      : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  <span>Débito</span>
+                  <span className="text-[10px] font-normal text-zinc-500">À vista</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('pix')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2 text-xs font-semibold transition ${
+                    paymentMethod === 'pix'
+                      ? 'border-purple-400 bg-purple-500/10 text-purple-300'
+                      : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  <span>Pix</span>
+                  <span className="text-[10px] font-normal text-zinc-500">Instantâneo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('credit')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2 text-xs font-semibold transition ${
+                    paymentMethod === 'credit'
+                      ? 'border-purple-400 bg-purple-500/10 text-purple-300'
+                      : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  <span>Crédito</span>
+                  <span className="text-[10px] font-normal text-zinc-500">
+                    {installments > 1 ? `${installments}x parcelas` : '1x ou parcelar'}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Categorias */}
@@ -389,15 +441,23 @@ export default function Expenses() {
                         <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400 border border-zinc-800">
                           {exp.category_name}
                         </span>
-                        {exp.payment_method && (
-                          <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-800 uppercase">
-                            {exp.payment_method === 'credit'
-                              ? exp.installment_total > 1
-                                ? `Crédito ${exp.installment_current}/${exp.installment_total}`
-                                : 'Crédito'
-                              : exp.payment_method}
-                          </span>
-                        )}
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold border ${
+                          exp.account_id === 'nubank'
+                            ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                            : exp.account_id === 'pluxe_alimentacao'
+                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                            : exp.account_id === 'pluxe_refeicao'
+                            ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+                            : 'bg-orange-500/10 text-orange-300 border-orange-500/20'
+                        }`}>
+                          {exp.account_id === 'nubank'
+                            ? `Nubank • ${exp.payment_method === 'credit' ? (exp.installment_total > 1 ? `Crédito (${exp.installment_current}/${exp.installment_total})` : 'Crédito') : exp.payment_method === 'pix' ? 'Pix' : 'Débito'}`
+                            : exp.account_id === 'pluxe_alimentacao'
+                            ? 'Pluxe Alim.'
+                            : exp.account_id === 'pluxe_refeicao'
+                            ? 'Pluxe Ref.'
+                            : 'Alelo'}
+                        </span>
                       </div>
                       {exp.description && <p className="truncate text-xs text-zinc-400 mt-0.5">{exp.description}</p>}
                     </div>

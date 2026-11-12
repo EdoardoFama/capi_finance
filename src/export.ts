@@ -12,6 +12,7 @@ export type ExportData = {
     description: string;
     category: string;
     amount_cents: number;
+    account_id?: string;
     payment_method: string;
     installment_current: number;
     installment_total: number;
@@ -23,7 +24,13 @@ export type ExportData = {
 /** 'all' = todos os meses; 'YYYY-MM' = apenas aquele mês (gastos). Orçamento e investimentos sempre completos. */
 export type ExportScope = 'all' | string;
 
-const PAYMENT_LABEL: Record<string, string> = { debit: 'debito', pix: 'pix', credit: 'credito' };
+const PAYMENT_LABEL: Record<string, string> = { debit: 'debito', pix: 'pix', credit: 'credito', voucher: 'voucher/beneficio' };
+const ACCOUNT_EXPORT_LABEL: Record<string, string> = {
+  nubank: 'Nubank',
+  pluxe_alimentacao: 'Pluxe Alimentacao',
+  pluxe_refeicao: 'Pluxe Refeicao',
+  alelo: 'Alelo',
+};
 const num = (cents: number) => (cents / 100).toFixed(2); // decimal com ponto: ideal para análise por IA/planilhas
 
 function scoped(data: ExportData, scope: ExportScope): ExportData {
@@ -49,7 +56,7 @@ const stamp = (data: ExportData, scope: ExportScope) =>
 
 // ===================== CSV =====================
 const CSV_HEADER = [
-  'tipo', 'mes', 'data', 'titulo', 'descricao', 'categoria', 'forma_pagamento',
+  'tipo', 'mes', 'data', 'titulo', 'descricao', 'categoria', 'conta', 'forma_pagamento',
   'parcela_atual', 'parcela_total', 'valor_brl', 'teto_mensal_brl', 'percentual_do_teto',
   'conta_investimento', 'saldo_brl', 'rendimento_ou_saque_brl', 'observacao',
 ];
@@ -77,7 +84,8 @@ export function exportCsv(full: ExportData, scope: ExportScope) {
   for (const e of data.expenses) {
     row({
       tipo: 'GASTO', mes: e.spent_on.slice(0, 7), data: e.spent_on, titulo: e.title, descricao: e.description,
-      categoria: e.category, forma_pagamento: PAYMENT_LABEL[e.payment_method] ?? e.payment_method,
+      categoria: e.category, conta: ACCOUNT_EXPORT_LABEL[e.account_id ?? 'nubank'] ?? 'Nubank',
+      forma_pagamento: PAYMENT_LABEL[e.payment_method] ?? e.payment_method,
       parcela_atual: e.installment_current, parcela_total: e.installment_total, valor_brl: num(e.amount_cents),
     });
   }
@@ -196,14 +204,15 @@ export async function exportPdf(full: ExportData, scope: ExportScope) {
   y = 40;
   title(`Lançamentos (${data.expenses.length})`);
   table({
-    head: [['Data', 'Título', 'Descrição', 'Categoria', 'Pagamento', 'Parcela', 'Valor']],
+    head: [['Data', 'Título', 'Descrição', 'Categoria', 'Conta', 'Pagamento', 'Parcela', 'Valor']],
     body: data.expenses.map((e) => [
       e.spent_on, e.title, e.description, e.category,
+      ACCOUNT_EXPORT_LABEL[e.account_id ?? 'nubank'] ?? 'Nubank',
       PAYMENT_LABEL[e.payment_method] ?? e.payment_method,
       e.installment_total > 1 ? `${e.installment_current}/${e.installment_total}` : '-',
       formatBRL(e.amount_cents),
     ]),
-    columnStyles: { 6: { halign: 'right' } },
+    columnStyles: { 7: { halign: 'right' } },
     styles: { fontSize: 7, cellPadding: 2 },
     headStyles: { ...head, fillColor: [24, 24, 27] },
   });

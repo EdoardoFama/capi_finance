@@ -555,8 +555,18 @@ app.delete('/categories/:id', async (c) => {
 });
 
 // ---------- lançamentos (expenses) ----------
+const VALID_ACCOUNTS = ['nubank', 'pluxe_alimentacao', 'pluxe_refeicao', 'alelo'] as const;
+type AccountId = (typeof VALID_ACCOUNTS)[number];
+const ACCOUNT_NAMES: Record<AccountId, string> = {
+  nubank: 'NUBANK',
+  pluxe_alimentacao: 'PLUXE - ALIMENTAÇÃO',
+  pluxe_refeicao: 'PLUXE - REFEIÇÃO',
+  alelo: 'ALELO',
+};
+
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
-  e.title, e.description, e.spent_on, e.payment_method, e.installment_current, e.installment_total,
+  e.title, e.description, e.spent_on, e.payment_method, COALESCE(e.account_id, 'nubank') AS account_id,
+  e.installment_current, e.installment_total,
   e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id`;
 
 function addMonthsToDate(isoDate: string, monthsToAdd: number): string {
@@ -601,21 +611,30 @@ app.post('/expenses', async (c) => {
   if (!isDate(spentOn)) bad('Data inválida');
   await assertCategory(c, categoryId, uid);
 
-  // Forma de pagamento
-  const rawMethod = typeof data.payment_method === 'string' ? data.payment_method : 'debit';
-  const paymentMethod = ['debit', 'pix', 'credit'].includes(rawMethod) ? rawMethod : 'debit';
+  // Conta de pagamento e forma
+  const rawAccount = typeof data.account_id === 'string' ? data.account_id : 'nubank';
+  const accountId: AccountId = (VALID_ACCOUNTS as readonly string[]).includes(rawAccount)
+    ? (rawAccount as AccountId)
+    : 'nubank';
 
-  // Parcelamento (apenas permitido quando credit)
-  const installments = paymentMethod === 'credit' && typeof data.installments === 'number' && Number.isInteger(data.installments) && data.installments > 1
+  const rawMethod = typeof data.payment_method === 'string'
+    ? data.payment_method
+    : (accountId === 'nubank' ? 'debit' : 'voucher');
+  const paymentMethod = ['debit', 'pix', 'credit', 'voucher'].includes(rawMethod)
+    ? rawMethod
+    : (accountId === 'nubank' ? 'debit' : 'voucher');
+
+  // Parcelamento (apenas permitido quando credit e na conta nubank)
+  const installments = accountId === 'nubank' && paymentMethod === 'credit' && typeof data.installments === 'number' && Number.isInteger(data.installments) && data.installments > 1
     ? Math.min(data.installments, 48)
     : 1;
 
   if (installments === 1) {
     const { id } = (await c.env.DB.prepare(
-      `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, installment_current, installment_total)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
+      `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
     )
-      .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod)
+      .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod, accountId)
       .first<{ id: number }>())!;
     const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
     return c.json(row, 201);
@@ -632,9 +651,9 @@ app.post('/expenses', async (c) => {
     const installmentDate = addMonthsToDate(spentOn, i - 1);
     statements.push(
       c.env.DB.prepare(
-        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, installment_current, installment_total, installment_group_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'credit', ?, ?, ?)`,
-      ).bind(uid, categoryId, installmentAmount, title, description, installmentDate, i, installments, groupId),
+        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total, installment_group_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'credit', ?, ?, ?, ?)`,
+      ).bind(uid, categoryId, installmentAmount, title, description, installmentDate, accountId, i, installments, groupId),
     );
   }
 
@@ -659,12 +678,21 @@ app.put('/expenses/:id', async (c) => {
   const spentOn = str(data.spent_on, 'data', { required: false });
   if (spentOn !== undefined && !isDate(spentOn)) bad('Data inválida');
   if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
+
+  const rawAccount = typeof data.account_id === 'string' && (VALID_ACCOUNTS as readonly string[]).includes(data.account_id)
+    ? data.account_id
+    : null;
+  const rawMethod = typeof data.payment_method === 'string' && ['debit', 'pix', 'credit', 'voucher'].includes(data.payment_method)
+    ? data.payment_method
+    : null;
+
   const updated = await c.env.DB.prepare(
     `UPDATE expenses SET category_id = COALESCE(?, category_id), amount_cents = COALESCE(?, amount_cents),
-     title = COALESCE(?, title), description = COALESCE(?, description), spent_on = COALESCE(?, spent_on)
+     title = COALESCE(?, title), description = COALESCE(?, description), spent_on = COALESCE(?, spent_on),
+     account_id = COALESCE(?, account_id), payment_method = COALESCE(?, payment_method)
      WHERE id = ? AND user_id = ? RETURNING id`,
   )
-    .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, id, uid)
+    .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, rawAccount, rawMethod, id, uid)
     .first();
   if (!updated) bad('Lançamento não encontrado', 404);
   const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
@@ -694,10 +722,10 @@ app.delete('/expenses/:id', async (c) => {
 
 // ---------- dashboard ----------
 app.get('/dashboard', async (c) => {
-  const month = c.req.query('month');
+  const month = c.req.query('month') || new Date().toISOString().slice(0, 7);
   const [start, end] = monthRange(month);
   const uid = c.get('userId');
-  const [cats, inc] = await c.env.DB.batch<Record<string, number | string>>([
+  const [cats, inc, balancesRes, spentPerAccountRes] = await c.env.DB.batch<Record<string, number | string>>([
     c.env.DB.prepare(
       `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order,
               COALESCE(SUM(e.amount_cents), 0) AS spent_cents, COUNT(e.id) AS count
@@ -707,15 +735,71 @@ app.get('/dashboard', async (c) => {
        GROUP BY c.id ORDER BY c.sort_order, c.id`,
     ).bind(start, end, uid),
     c.env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM incomes WHERE user_id = ?').bind(uid),
+    c.env.DB.prepare(
+      'SELECT account_id, initial_cents FROM account_balances WHERE user_id = ? AND month = ?',
+    ).bind(uid, month),
+    c.env.DB.prepare(
+      `SELECT COALESCE(account_id, 'nubank') AS account_id, COALESCE(SUM(amount_cents), 0) AS spent_cents
+       FROM expenses
+       WHERE user_id = ? AND spent_on >= ? AND spent_on < ?
+       GROUP BY COALESCE(account_id, 'nubank')`,
+    ).bind(uid, start, end),
   ]);
+
   const categories = cats.results as unknown as { budget_cents: number; spent_cents: number }[];
+
+  const balancesMap: Record<string, number> = {};
+  for (const row of (balancesRes?.results ?? []) as unknown as { account_id: string; initial_cents: number }[]) {
+    balancesMap[row.account_id] = row.initial_cents;
+  }
+
+  const spentMap: Record<string, number> = {};
+  for (const row of (spentPerAccountRes?.results ?? []) as unknown as { account_id: string; spent_cents: number }[]) {
+    spentMap[row.account_id] = row.spent_cents;
+  }
+
+  const accounts = VALID_ACCOUNTS.map((accId) => {
+    const initial_cents = balancesMap[accId] ?? 0;
+    const spent_cents = spentMap[accId] ?? 0;
+    return {
+      account_id: accId,
+      name: ACCOUNT_NAMES[accId],
+      initial_cents,
+      spent_cents,
+      current_cents: initial_cents - spent_cents,
+    };
+  });
+
   return c.json({
     month,
     total_income_cents: Number(inc.results[0]?.total ?? 0),
     total_budget_cents: categories.reduce((s, x) => s + x.budget_cents, 0),
     total_spent_cents: categories.reduce((s, x) => s + x.spent_cents, 0),
     categories,
+    accounts,
   });
+});
+
+// ---------- saldos das contas (abertos para edição) ----------
+app.put('/accounts/balance', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const month = str(data.month, 'mês')!;
+  if (!/^\d{4}-\d{2}$/.test(month)) bad('Mês inválido');
+  const accountId = str(data.account_id, 'conta')!;
+  if (!(VALID_ACCOUNTS as readonly string[]).includes(accountId)) bad('Conta inválida');
+  const initialCents = cents(data.initial_cents, 'saldo em conta')!;
+
+  await c.env.DB.prepare(
+    `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(user_id, month, account_id)
+     DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
+  )
+    .bind(uid, month, accountId, initialCents)
+    .run();
+
+  return c.json({ ok: true, account_id: accountId, month, initial_cents: initialCents });
 });
 
 // ---------- investimentos ----------
@@ -795,6 +879,7 @@ app.get('/export', async (c) => {
     db.prepare('SELECT name, budget_cents, note FROM categories WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
     db.prepare(
       `SELECT e.spent_on, e.title, e.description, c.name AS category, e.amount_cents, e.payment_method,
+              COALESCE(e.account_id, 'nubank') AS account_id,
               e.installment_current, e.installment_total
        FROM expenses e JOIN categories c ON c.id = e.category_id
        WHERE e.user_id = ? ORDER BY e.spent_on, e.id`,

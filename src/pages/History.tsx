@@ -273,15 +273,23 @@ export default function History() {
                         <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-zinc-800">
                           {exp.category_name}
                         </span>
-                        {exp.payment_method && (
-                          <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400 border border-zinc-800 uppercase">
-                            {exp.payment_method === 'credit'
-                              ? exp.installment_total > 1
-                                ? `Crédito ${exp.installment_current}/${exp.installment_total}`
-                                : 'Crédito'
-                              : exp.payment_method}
-                          </span>
-                        )}
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold border ${
+                          exp.account_id === 'nubank'
+                            ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                            : exp.account_id === 'pluxe_alimentacao'
+                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                            : exp.account_id === 'pluxe_refeicao'
+                            ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+                            : 'bg-orange-500/10 text-orange-300 border-orange-500/20'
+                        }`}>
+                          {exp.account_id === 'nubank'
+                            ? `Nubank • ${exp.payment_method === 'credit' ? (exp.installment_total > 1 ? `Crédito (${exp.installment_current}/${exp.installment_total})` : 'Crédito') : exp.payment_method === 'pix' ? 'Pix' : 'Débito'}`
+                            : exp.account_id === 'pluxe_alimentacao'
+                            ? 'Pluxe Alim.'
+                            : exp.account_id === 'pluxe_refeicao'
+                            ? 'Pluxe Ref.'
+                            : 'Alelo'}
+                        </span>
                       </div>
                       {exp.description && (
                         <p className="truncate text-xs text-zinc-400 mt-0.5 font-normal">{exp.description}</p>

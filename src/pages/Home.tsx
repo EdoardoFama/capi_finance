@@ -1,9 +1,142 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { api, type Dashboard } from '../api';
-import { useMonth } from '../context';
-import { formatBRL, percent } from '../format';
+import { api, type Dashboard, type AccountBalance, type AccountId, ACCOUNT_DEFINITIONS } from '../api';
+import { useMonth, useToast } from '../context';
+import { formatBRL, parseBRL, percent } from '../format';
 import { Card, IconPlus, MonthPicker, ProgressBar, Spinner, textColor } from '../components/ui';
+
+function AccountCard({
+  account,
+  month,
+  onUpdate,
+}: {
+  account: AccountBalance;
+  month: string;
+  onUpdate: (accountId: AccountId, newInitialCents: number) => void;
+}) {
+  const info = ACCOUNT_DEFINITIONS.find((a) => a.id === account.account_id) ?? {
+    id: account.account_id,
+    name: account.name,
+    tag: account.name,
+    color: '#10b981',
+    badgeClass: 'bg-zinc-800 text-zinc-300 border-zinc-700',
+    borderClass: 'border-zinc-800',
+  };
+
+  const toast = useToast();
+  const [val, setVal] = useState(
+    account.initial_cents ? (account.initial_cents / 100).toFixed(2).replace('.', ',') : '',
+  );
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setVal(account.initial_cents ? (account.initial_cents / 100).toFixed(2).replace('.', ',') : '');
+  }, [account.initial_cents]);
+
+  async function handleSave() {
+    const parsed = parseBRL(val);
+    const newCents = parsed ?? 0;
+    if (newCents === account.initial_cents) return;
+
+    setIsSaving(true);
+    try {
+      await api('/accounts/balance', {
+        method: 'PUT',
+        body: { month, account_id: account.account_id, initial_cents: newCents },
+      });
+      onUpdate(account.account_id, newCents);
+      toast(`Saldo de ${info.name} salvo!`);
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  const isNegative = account.current_cents < 0;
+  const spentPct = account.initial_cents > 0
+    ? Math.min(100, Math.round((account.spent_cents / account.initial_cents) * 100))
+    : (account.spent_cents > 0 ? 100 : 0);
+
+  return (
+    <Card className={`relative flex flex-col justify-between border transition hover:border-zinc-700 ${info.borderClass}`}>
+      <div>
+        {/* Header da Conta */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: info.color }}
+            />
+            <span className="text-xs font-bold tracking-wide text-zinc-200">{info.name}</span>
+          </div>
+          <Link
+            to={`/lancar?conta=${account.account_id}`}
+            title={`Lançar gasto em ${info.name}`}
+            className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
+          >
+            <IconPlus className="h-4 w-4" />
+          </Link>
+        </div>
+
+        {/* Saldo Atual (Restante) */}
+        <div className="mt-3">
+          <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Saldo Atual</p>
+          <p className={`mt-0.5 text-2xl font-bold tracking-tight ${isNegative ? 'text-red-400' : 'text-emerald-400'}`}>
+            {formatBRL(account.current_cents)}
+          </p>
+        </div>
+
+        {/* Barra de progresso de consumo */}
+        <div className="mt-2.5">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className={`h-full transition-all ${isNegative ? 'bg-red-500' : ''}`}
+              style={{
+                width: `${spentPct}%`,
+                backgroundColor: isNegative ? undefined : info.color,
+              }}
+            />
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[10px] text-zinc-500">
+            <span>{spentPct}% consumido</span>
+            <span>{account.initial_cents > 0 ? `${formatBRL(account.current_cents)} livre` : ''}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Campo aberto para editar o Saldo em Conta */}
+      <div className="mt-3.5 border-t border-zinc-800/80 pt-2.5 space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[11px] font-medium text-zinc-400">Saldo em conta:</label>
+          <div className="relative flex items-center">
+            <span className="text-xs text-zinc-500 mr-1">R$</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="0,00"
+              value={val}
+              onChange={(e) => setVal(e.target.value)}
+              onBlur={handleSave}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.currentTarget.blur();
+                }
+              }}
+              disabled={isSaving}
+              className="w-24 rounded-lg border border-zinc-700/80 bg-zinc-950 px-2 py-1 text-right text-xs font-semibold text-zinc-100 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-zinc-500">
+          <span>Gastos no mês:</span>
+          <span className="font-medium text-zinc-400">-{formatBRL(account.spent_cents)}</span>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function Home() {
   const { month } = useMonth();
@@ -22,10 +155,27 @@ export default function Home() {
     };
   }, [month]);
 
+  function handleAccountInitialUpdate(accountId: AccountId, newInitialCents: number) {
+    setData((prev) => {
+      if (!prev) return prev;
+      const updatedAccounts = (prev.accounts ?? []).map((acc) => {
+        if (acc.account_id === accountId) {
+          return {
+            ...acc,
+            initial_cents: newInitialCents,
+            current_cents: newInitialCents - acc.spent_cents,
+          };
+        }
+        return acc;
+      });
+      return { ...prev, accounts: updatedAccounts };
+    });
+  }
+
   const totalPct = data ? percent(data.total_spent_cents, data.total_budget_cents) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <MonthPicker />
 
       {error && <p className="text-sm text-red-400">{error}</p>}
@@ -33,7 +183,30 @@ export default function Home() {
 
       {data && (
         <>
-          {/* Resumo do mês */}
+          {/* ================= SALDO EM CONTA & BENEFÍCIOS ================= */}
+          <div>
+            <div className="mb-2.5 flex items-center justify-between">
+              <h2 className="text-base font-semibold tracking-tight text-zinc-100">
+                Saldo em Conta & Benefícios
+              </h2>
+              <span className="text-[11px] text-zinc-500">
+                Digite o valor para atualizar
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {(data.accounts ?? []).map((acc) => (
+                <AccountCard
+                  key={acc.account_id}
+                  account={acc}
+                  month={month}
+                  onUpdate={handleAccountInitialUpdate}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Resumo do orçamento do mês */}
           <Card className="bg-gradient-to-br from-zinc-900 to-black">
             <div className="flex items-start justify-between">
               <div>
@@ -67,9 +240,9 @@ export default function Home() {
           </Card>
 
           {/* Categorias */}
-          <div className="flex items-center justify-between pt-2">
-            <h2 className="text-lg font-semibold">Por categoria</h2>
-            <Link to="/orcamento" className="text-sm text-emerald-400 hover:underline">
+          <div className="flex items-center justify-between pt-1">
+            <h2 className="text-base font-semibold text-zinc-100">Por categoria</h2>
+            <Link to="/orcamento" className="text-xs text-emerald-400 hover:underline">
               Editar orçamento
             </Link>
           </div>
@@ -122,4 +295,3 @@ export default function Home() {
     </div>
   );
 }
-
