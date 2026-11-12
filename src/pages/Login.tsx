@@ -192,20 +192,23 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center px-6 py-10">
-      <div className="w-full max-w-sm">
+    <div className="flex min-h-dvh items-center justify-center px-5 py-10">
+      <div className="relative w-full max-w-sm overflow-hidden rounded-3xl border border-white/[0.09] bg-zinc-950/90 p-6 sm:p-7 shadow-2xl backdrop-blur-xl">
+        <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-emerald-500/15 blur-3xl" />
         {/* Logo e cabeçalho */}
-        <div className="mb-6 flex flex-col items-center text-center">
-          <img src="/logo.png" alt="Capi Finance" className="mb-3 h-24 w-24 object-contain" />
-          <h1 className="text-2xl font-bold tracking-tight">
-            Capi <span className="text-emerald-400">Finance</span>
+        <div className="relative mb-6 flex flex-col items-center text-center">
+          <div className="mb-3 flex h-20 w-20 items-center justify-center rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/15 to-zinc-900 p-2 shadow-inner">
+            <img src="/logo.png" alt="Capi Finance" className="h-16 w-16 object-contain" />
+          </div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-white">
+            Capi <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">Finance</span>
           </h1>
-          <p className="mt-1 text-xs text-zinc-500">
-            {mode === 'login' && 'Controle de gastos pessoais'}
-            {mode === 'signup_data' && 'Criar sua conta'}
-            {mode === 'signup_otp' && 'Confirmação por e-mail'}
-            {mode === 'forgot_email' && 'Recuperar senha'}
-            {mode === 'forgot_otp' && 'Definir nova senha'}
+          <p className="mt-1 text-xs font-medium text-zinc-400">
+            {mode === 'login' && 'Gestão inteligente de finanças pessoais'}
+            {mode === 'signup_data' && 'Crie sua conta gratuita'}
+            {mode === 'signup_otp' && 'Confirmação de segurança por e-mail'}
+            {mode === 'forgot_email' && 'Recuperação de acesso'}
+            {mode === 'forgot_otp' && 'Defina sua nova senha'}
           </p>
         </div>
 
