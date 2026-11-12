@@ -389,6 +389,13 @@ export default function Budget() {
   const [cats, setCats] = useState<Category[] | null>(null);
   const [catFilter, setCatFilter] = useState<'all' | 'fixed' | 'variable'>('all');
 
+  const budgetDistributionItems = useMemo(() => {
+    return (cats ?? []).map((c) => ({
+      name: c.name,
+      amount_cents: c.budget_cents,
+    }));
+  }, [cats]);
+
   useEffect(() => {
     Promise.all([api<Income[]>('/incomes'), api<Category[]>('/categories')])
       .then(([i, c]) => {
@@ -420,13 +427,6 @@ export default function Budget() {
 
   const displayedCats =
     catFilter === 'fixed' ? fixedCats : catFilter === 'variable' ? variableCats : cats;
-
-  const budgetDistributionItems = useMemo(() => {
-    return (cats ?? []).map((c) => ({
-      name: c.name,
-      amount_cents: c.budget_cents,
-    }));
-  }, [cats]);
 
   return (
     <div className="space-y-4">

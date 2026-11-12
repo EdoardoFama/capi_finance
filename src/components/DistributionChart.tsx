@@ -47,7 +47,12 @@ export default function DistributionChart({
 }: Props) {
   // Filtra itens com valor > 0 e ordena do maior para o menor
   const sortedItems = useMemo(() => {
-    return items
+    return (items || [])
+      .map((it) => ({
+        ...it,
+        name: it.name || 'Sem categoria',
+        amount_cents: Number(it.amount_cents || 0),
+      }))
       .filter((it) => it.amount_cents > 0)
       .sort((a, b) => b.amount_cents - a.amount_cents)
       .map((it, idx) => ({
@@ -81,11 +86,11 @@ export default function DistributionChart({
       {/* Barra Multicolorida Segmentada */}
       <div className="mt-4">
         <div className="h-3.5 w-full overflow-hidden rounded-full bg-zinc-900 flex shadow-inner">
-          {sortedItems.map((it) => {
+          {sortedItems.map((it, idx) => {
             const pct = (it.amount_cents / totalCents) * 100;
             return (
               <div
-                key={it.name}
+                key={`segment-${it.name}-${idx}`}
                 style={{
                   width: `${pct}%`,
                   backgroundColor: it.color,
@@ -100,11 +105,11 @@ export default function DistributionChart({
 
       {/* Grid de Legendas com Porcentagem e Valores */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {sortedItems.map((it) => {
+        {sortedItems.map((it, idx) => {
           const pct = (it.amount_cents / totalCents) * 100;
           return (
             <div
-              key={it.name}
+              key={`legend-${it.name}-${idx}`}
               className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-2.5 transition hover:border-zinc-700 hover:bg-zinc-900/70"
             >
               <div className="flex items-center gap-2 min-w-0 flex-1">
