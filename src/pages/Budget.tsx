@@ -85,7 +85,7 @@ function IncomeRow({
 
 /* =========================================================
    LINHA DE CATEGORIA / GASTO PREVISTO
-   Linha 1: Nome + Valor (teto) + Excluir
+   Linha 1: Tipo (Fixa/Variável) + Nome + Valor (teto) + Excluir
    Linha 2: Observação (opcional)
    ========================================================= */
 function CategoryRow({
@@ -94,12 +94,13 @@ function CategoryRow({
   onDelete,
 }: {
   item: Category;
-  onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string }) => Promise<void>;
+  onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string; is_fixed?: number }) => Promise<void>;
   onDelete: (id: number, name: string) => void;
 }) {
   const [name, setName] = useState(item.name);
   const [budget, setBudget] = useState(centsToInput(item.budget_cents));
   const [note, setNote] = useState(item.note);
+  const isFixed = item.is_fixed === undefined ? 1 : Number(item.is_fixed);
 
   useEffect(() => {
     setName(item.name);
@@ -131,10 +132,29 @@ function CategoryRow({
     await onSave(item.id, { note: trimmed }).catch(() => setNote(item.note));
   }
 
+  async function toggleFixed() {
+    const next = isFixed === 1 ? 0 : 1;
+    await onSave(item.id, { is_fixed: next });
+  }
+
   return (
-    <div className="py-2 space-y-1.5">
+    <div className="py-2.5 space-y-1.5 transition hover:bg-zinc-900/30 px-2 rounded-xl">
       <div className="flex items-center gap-2">
-        {/* Campo Categoria */}
+        {/* Botão de Alternar Fixa / Variável */}
+        <button
+          type="button"
+          onClick={toggleFixed}
+          className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-bold border transition ${
+            isFixed === 1
+              ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30 ring-1 ring-blue-500/30'
+              : 'bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30 ring-1 ring-purple-500/30'
+          }`}
+          title={isFixed === 1 ? 'Categoria Fixa (com teto). Clique para mudar para Variável.' : 'Categoria Variável (Por Fora). Clique para mudar para Fixa.'}
+        >
+          {isFixed === 1 ? 'Fixa' : 'Variável'}
+        </button>
+
+        {/* Campo Nome da Categoria */}
         <div className="flex-1 min-w-0">
           <Input
             value={name}
@@ -146,8 +166,12 @@ function CategoryRow({
           />
         </div>
 
-        {/* Campo Teto Mensal R$ */}
-        <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20">
+        {/* Campo Teto Mensal R$ (Permanece sempre visível para não causar sustos) */}
+        <div className={`w-36 sm:w-44 shrink-0 flex items-center rounded-xl border bg-zinc-900 px-3 py-1.5 focus-within:ring-2 ${
+          isFixed === 1
+            ? 'border-zinc-800 focus-within:border-emerald-500/60 focus-within:ring-emerald-500/20'
+            : 'border-purple-500/30 bg-purple-950/10 focus-within:border-purple-500/60 focus-within:ring-purple-500/20'
+        }`}>
           <span className="text-xs font-semibold text-zinc-500 mr-1.5 select-none">R$</span>
           <input
             value={budget}
@@ -156,7 +180,9 @@ function CategoryRow({
             onChange={(e) => setBudget(e.target.value)}
             onBlur={commitBudget}
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            className="w-full bg-transparent text-right font-semibold text-red-400 tabular-nums outline-none placeholder:text-zinc-700"
+            className={`w-full bg-transparent text-right font-semibold tabular-nums outline-none placeholder:text-zinc-700 ${
+              isFixed === 1 ? 'text-red-400' : 'text-purple-300'
+            }`}
           />
         </div>
 
@@ -171,16 +197,21 @@ function CategoryRow({
         </button>
       </div>
 
-      {/* Observação logo abaixo (indentada) */}
-      <div className="pr-12">
+      {/* Linha auxiliar: Observação e indicador de Por Fora se for variável */}
+      <div className="flex items-center gap-2 pl-12 pr-12">
         <input
           value={note}
-          placeholder="Adicionar observação (ex: Água inclusa)..."
+          placeholder={isFixed === 1 ? 'Adicionar observação (ex: Água inclusa)...' : 'Observação (Consome do valor Por Fora)...'}
           onChange={(e) => setNote(e.target.value)}
           onBlur={commitNote}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          className="w-full rounded-lg bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-400 placeholder:text-zinc-600 outline-none border border-transparent focus:border-zinc-800"
+          className="w-full rounded-lg bg-zinc-900/40 px-3 py-1 text-xs text-zinc-400 placeholder:text-zinc-600 outline-none border border-transparent focus:border-zinc-800"
         />
+        {isFixed === 0 && (
+          <span className="shrink-0 text-[10px] font-semibold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
+            Consome do Por Fora
+          </span>
+        )}
       </div>
     </div>
   );
@@ -249,11 +280,12 @@ function AddIncomeRow({ onAdd }: { onAdd: (name: string, amountCents: number) =>
 function AddCategoryRow({
   onAdd,
 }: {
-  onAdd: (name: string, budgetCents: number, note: string) => Promise<void>;
+  onAdd: (name: string, budgetCents: number, note: string, isFixed: number) => Promise<void>;
 }) {
   const [name, setName] = useState('');
   const [budget, setBudget] = useState('');
   const [note, setNote] = useState('');
+  const [isFixed, setIsFixed] = useState(1); // 1 = Fixa, 0 = Variável
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -261,12 +293,12 @@ function AddCategoryRow({
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return toast('Informe o nome da categoria', 'error');
-    const cents = parseBRL(budget || '0');
+    const cents = isFixed === 1 ? parseBRL(budget || '0') : 0;
     if (cents === null) return toast('Valor inválido', 'error');
 
     setBusy(true);
     try {
-      await onAdd(trimmed, cents, note.trim());
+      await onAdd(trimmed, cents, note.trim(), isFixed);
       setName('');
       setBudget('');
       setNote('');
@@ -277,24 +309,55 @@ function AddCategoryRow({
 
   return (
     <form onSubmit={submit} className="space-y-2 border-t border-dashed border-zinc-800 pt-3 mt-1">
+      {/* Seletor de Tipo: Fixa ou Variável */}
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-xs font-medium text-zinc-400">Tipo:</span>
+        <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900 p-0.5">
+          <button
+            type="button"
+            onClick={() => setIsFixed(1)}
+            className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+              isFixed === 1 ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40' : 'text-zinc-400'
+            }`}
+          >
+            Fixa (com teto)
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFixed(0)}
+            className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+              isFixed === 0 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' : 'text-zinc-400'
+            }`}
+          >
+            Variável (Por Fora)
+          </button>
+        </div>
+      </div>
+
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <Input
             value={name}
-            placeholder="Nova categoria..."
+            placeholder={isFixed === 1 ? 'Nova categoria fixa...' : 'Nova categoria variável...'}
             onChange={(e) => setName(e.target.value)}
           />
         </div>
-        <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5">
-          <span className="text-xs font-semibold text-zinc-500 mr-1.5">R$</span>
-          <input
-            value={budget}
-            placeholder="0,00"
-            inputMode="decimal"
-            onChange={(e) => setBudget(e.target.value)}
-            className="w-full bg-transparent text-right font-semibold text-red-400 tabular-nums outline-none placeholder:text-zinc-700"
-          />
-        </div>
+        {isFixed === 1 ? (
+          <div className="w-36 sm:w-44 shrink-0 flex items-center rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5">
+            <span className="text-xs font-semibold text-zinc-500 mr-1.5">R$</span>
+            <input
+              value={budget}
+              placeholder="0,00"
+              inputMode="decimal"
+              onChange={(e) => setBudget(e.target.value)}
+              className="w-full bg-transparent text-right font-semibold text-red-400 tabular-nums outline-none placeholder:text-zinc-700"
+            />
+          </div>
+        ) : (
+          <div className="w-36 sm:w-44 shrink-0 flex items-center justify-end rounded-xl border border-dashed border-purple-500/30 bg-purple-500/5 px-3 py-2 text-right">
+            <span className="text-xs font-medium text-purple-300">Consome Por Fora</span>
+          </div>
+        )}
         <button
           disabled={busy}
           className="rounded-xl bg-emerald-400 p-2 text-black hover:bg-emerald-300 transition disabled:opacity-60"
@@ -323,6 +386,7 @@ export default function Budget() {
   const toast = useToast();
   const [incomes, setIncomes] = useState<Income[] | null>(null);
   const [cats, setCats] = useState<Category[] | null>(null);
+  const [catFilter, setCatFilter] = useState<'all' | 'fixed' | 'variable'>('all');
 
   useEffect(() => {
     Promise.all([api<Income[]>('/incomes'), api<Category[]>('/categories')])
@@ -347,8 +411,14 @@ export default function Budget() {
   if (!incomes || !cats) return <Spinner />;
 
   const totalIncome = incomes.reduce((s, x) => s + x.amount_cents, 0);
-  const totalBudget = cats.reduce((s, x) => s + x.budget_cents, 0);
-  const leftover = totalIncome - totalBudget;
+  const fixedCats = cats.filter((c) => c.is_fixed === undefined || c.is_fixed === 1);
+  const variableCats = cats.filter((c) => c.is_fixed === 0);
+
+  const fixedBudget = fixedCats.reduce((s, x) => s + x.budget_cents, 0);
+  const leftover = totalIncome - fixedBudget;
+
+  const displayedCats =
+    catFilter === 'fixed' ? fixedCats : catFilter === 'variable' ? variableCats : cats;
 
   return (
     <div className="space-y-4">
@@ -361,12 +431,12 @@ export default function Budget() {
           <p className="mt-1 text-sm font-bold text-emerald-400 tabular-nums sm:text-base">{formatBRL(totalIncome)}</p>
         </Card>
         <Card className="!p-3">
-          <p className="text-[11px] tracking-wide text-zinc-500 uppercase">Gastos</p>
-          <p className="mt-1 text-sm font-bold text-red-400 tabular-nums sm:text-base">{formatBRL(totalBudget)}</p>
+          <p className="text-[11px] tracking-wide text-zinc-500 uppercase">Gastos Fixos</p>
+          <p className="mt-1 text-sm font-bold text-red-400 tabular-nums sm:text-base">{formatBRL(fixedBudget)}</p>
         </Card>
         <Card className="!p-3">
           <p className="text-[11px] tracking-wide text-zinc-500 uppercase">Por fora</p>
-          <p className={`mt-1 text-sm font-bold tabular-nums sm:text-base ${leftover < 0 ? 'text-red-400' : 'text-white'}`}>
+          <p className={`mt-1 text-sm font-bold tabular-nums sm:text-base ${leftover < 0 ? 'text-red-400' : 'text-purple-300'}`}>
             {formatBRL(leftover)}
           </p>
         </Card>
@@ -406,22 +476,62 @@ export default function Budget() {
         />
       </Card>
 
-      {/* Seção Gastos Previstos */}
+      {/* Seção Categorias (Lista Unificada Estável com Filtros) */}
       <Card>
-        <div className="mb-2 flex items-center justify-between border-b border-zinc-900 pb-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-zinc-900 pb-3">
           <div>
-            <h2 className="font-semibold text-base">Gastos previstos</h2>
-            <p className="text-xs text-zinc-500">Teto máximo estipulado por categoria</p>
+            <h2 className="font-semibold text-base">Categorias de Gastos</h2>
+            <p className="text-xs text-zinc-500">
+              Fixas: teto estipulado • Variáveis: consomem do valor Por Fora
+            </p>
           </div>
-          <span className="text-sm font-semibold text-red-400 tabular-nums">{formatBRL(totalBudget)}</span>
+
+          {/* Abas de Filtro para visualização */}
+          <div className="flex items-center rounded-xl border border-zinc-800 bg-zinc-900 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setCatFilter('all')}
+              className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                catFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Todas ({cats.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setCatFilter('fixed')}
+              className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                catFilter === 'fixed' ? 'bg-blue-500/20 text-blue-300 shadow-sm' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Fixas ({fixedCats.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setCatFilter('variable')}
+              className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                catFilter === 'variable' ? 'bg-purple-500/20 text-purple-300 shadow-sm' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Variáveis ({variableCats.length})
+            </button>
+          </div>
         </div>
+
         <div className="divide-y divide-zinc-900">
-          {cats.map((c) => (
+          {displayedCats.map((c) => (
             <CategoryRow
               key={c.id}
               item={c}
               onSave={async (id, patch) => {
-                const upd = await run(() => api<Category>(`/categories/${id}`, { method: 'PUT', body: patch }), 'Salvo');
+                const isTypeChange = patch.is_fixed !== undefined;
+                const message = isTypeChange
+                  ? `Categoria alterada para ${patch.is_fixed === 1 ? 'Fixa' : 'Variável (Por Fora)'}`
+                  : 'Salvo';
+                const upd = await run(
+                  () => api<Category>(`/categories/${id}`, { method: 'PUT', body: patch }),
+                  message,
+                );
                 setCats((l) => l!.map((x) => (x.id === id ? upd : x)));
               }}
               onDelete={async (id, name) => {
@@ -432,10 +542,15 @@ export default function Budget() {
             />
           ))}
         </div>
+
         <AddCategoryRow
-          onAdd={async (name, budgetCents, note) => {
+          onAdd={async (name, budgetCents, note, isFixed) => {
             const created = await run(
-              () => api<Category>('/categories', { method: 'POST', body: { name, budget_cents: budgetCents, note } }),
+              () =>
+                api<Category>('/categories', {
+                  method: 'POST',
+                  body: { name, budget_cents: budgetCents, note, is_fixed: isFixed },
+                }),
               'Categoria adicionada',
             );
             setCats((l) => [...l!, created]);
@@ -444,13 +559,13 @@ export default function Budget() {
       </Card>
 
       {/* Card Gastos por fora */}
-      <Card className={leftover < 0 ? 'border-red-500/40' : 'border-emerald-500/30'}>
+      <Card className={leftover < 0 ? 'border-red-500/40' : 'border-purple-500/30'}>
         <div className="flex items-center justify-between">
           <div>
             <p className="font-semibold">Gastos por fora</p>
-            <p className="text-xs text-zinc-500">Ganhos − gastos previstos</p>
+            <p className="text-xs text-zinc-500">Ganhos − gastos fixos previstos</p>
           </div>
-          <p className={`text-xl font-bold tabular-nums ${leftover < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+          <p className={`text-xl font-bold tabular-nums ${leftover < 0 ? 'text-red-400' : 'text-purple-300'}`}>
             {formatBRL(leftover)}
           </p>
         </div>

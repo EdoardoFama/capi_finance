@@ -40,7 +40,14 @@ export type AdminUser = {
 };
 
 export type Income = { id: number; name: string; amount_cents: number; sort_order: number };
-export type Category = { id: number; name: string; budget_cents: number; note: string; sort_order: number };
+export type Category = {
+  id: number;
+  name: string;
+  budget_cents: number;
+  note: string;
+  sort_order: number;
+  is_fixed?: number;
+};
 
 export type AccountId = 'nubank' | 'pluxe_alimentacao' | 'pluxe_refeicao' | 'alelo';
 export type PaymentMethod = 'debit' | 'pix' | 'credit' | 'voucher';
@@ -113,13 +120,19 @@ export type Expense = {
   created_at: string;
 };
 
-export type DashboardCategory = Category & { spent_cents: number; count: number };
+export type DashboardCategory = Category & { spent_cents: number; count: number; is_fixed: number };
 
 export type Dashboard = {
   month: string;
   total_income_cents: number;
   total_budget_cents: number;
   total_spent_cents: number;
+  fixed_budget_cents: number;
+  fixed_spent_cents: number;
+  variable_spent_cents: number;
+  por_fora_budget_cents: number;
+  por_fora_spent_cents: number;
+  por_fora_remaining_cents: number;
   categories: DashboardCategory[];
   accounts: AccountBalance[];
 };
@@ -141,4 +154,15 @@ export type InvestmentSnapshot = {
 export type InvestmentsData = {
   accounts: InvestmentAccount[];
   snapshots: InvestmentSnapshot[];
+};
+
+export type CreditCardInvoice = {
+  month: string;
+  total_cents: number;
+  count: number;
+  is_paid: boolean;
+  paid_at: string | null;
+  paid_amount_cents: number;
+  nubank_balance_cents: number;
+  expenses: Expense[];
 };

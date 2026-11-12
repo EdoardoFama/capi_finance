@@ -32,6 +32,12 @@ export const IconChevron = ({ dir = 'left', className }: { dir?: 'left' | 'right
 export const IconLogout = (p: { className?: string }) => (
   <Svg {...p}><path d="M15 4h4v16h-4" /><path d="M10 8l-4 4 4 4" /><path d="M6 12h10" /></Svg>
 );
+export const IconCreditCard = (p: { className?: string }) => (
+  <Svg {...p}><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></Svg>
+);
+export const IconEdit = (p: { className?: string }) => (
+  <Svg {...p}><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></Svg>
+);
 
 // ---------- Seletor de mês ----------
 export function MonthPicker() {

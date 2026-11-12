@@ -217,23 +217,29 @@ export default function Home() {
           <Card className="bg-gradient-to-br from-zinc-900 to-black">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Gasto no mês</p>
+                <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Gasto total no mês</p>
                 <p className="mt-1 text-3xl font-bold tracking-tight">{formatBRL(data.total_spent_cents)}</p>
-                <p className="mt-0.5 text-sm text-zinc-500">de {formatBRL(data.total_budget_cents)} previstos</p>
+                <p className="mt-0.5 text-xs text-zinc-400">
+                  Fixos: {formatBRL(data.fixed_spent_cents)} / {formatBRL(data.fixed_budget_cents)} • Variáveis (Por fora): {formatBRL(data.variable_spent_cents)}
+                </p>
               </div>
               <span className={`text-2xl font-bold ${textColor(totalPct)}`}>{totalPct}%</span>
             </div>
             <ProgressBar spent={data.total_spent_cents} budget={data.total_budget_cents} className="mt-4 h-2.5" />
-            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-zinc-800 pt-4 text-sm">
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 border-t border-zinc-800 pt-4 text-sm">
               <div>
-                <p className="text-zinc-500">Restante do orçamento</p>
-                <p className={`font-semibold ${data.total_budget_cents - data.total_spent_cents < 0 ? 'text-red-400' : ''}`}>
-                  {formatBRL(data.total_budget_cents - data.total_spent_cents)}
-                </p>
+                <p className="text-zinc-500 text-xs">Ganhos previstos</p>
+                <p className="font-semibold text-emerald-400">{formatBRL(data.total_income_cents)}</p>
               </div>
               <div>
-                <p className="text-zinc-500">Ganhos previstos</p>
-                <p className="font-semibold">{formatBRL(data.total_income_cents)}</p>
+                <p className="text-zinc-500 text-xs">Gastos Fixos (Teto)</p>
+                <p className="font-semibold text-zinc-200">{formatBRL(data.fixed_budget_cents)}</p>
+              </div>
+              <div>
+                <p className="text-zinc-500 text-xs">Por Fora (Disponível)</p>
+                <p className={`font-semibold ${data.por_fora_remaining_cents < 0 ? 'text-red-400' : 'text-purple-300'}`}>
+                  {formatBRL(data.por_fora_remaining_cents)}
+                </p>
               </div>
             </div>
             <div className="mt-3 border-t border-zinc-900 pt-3">
@@ -246,49 +252,178 @@ export default function Home() {
             </div>
           </Card>
 
-          {/* Categorias */}
-          <div className="flex items-center justify-between pt-1">
-            <h2 className="text-base font-semibold text-zinc-100">Por categoria</h2>
-            <Link to="/orcamento" className="text-xs text-emerald-400 hover:underline">
-              Editar orçamento
-            </Link>
+          {/* ================= CATEGORIAS FIXAS ================= */}
+          <div className="space-y-3 pt-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                  <h2 className="text-base font-bold text-zinc-100">Categorias Fixas</h2>
+                  <span className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-400 border border-blue-500/20">
+                    Teto Previsto
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Gastos essenciais com limite estipulado ({formatBRL(data.fixed_spent_cents)} de {formatBRL(data.fixed_budget_cents)})
+                </p>
+              </div>
+              <Link to="/orcamento" className="text-xs text-emerald-400 hover:underline">
+                Editar orçamento
+              </Link>
+            </div>
+
+            {data.categories.filter((c) => c.is_fixed === 1).length === 0 ? (
+              <Card className="text-center text-sm text-zinc-500">
+                Nenhuma categoria fixa cadastrada.
+              </Card>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {data.categories
+                  .filter((c) => c.is_fixed === 1)
+                  .map((c) => {
+                    const pct = percent(c.spent_cents, c.budget_cents);
+                    const left = c.budget_cents - c.spent_cents;
+                    return (
+                      <Link key={c.id} to={`/lancar?categoria=${c.id}`} className="block">
+                        <Card className="transition hover:border-zinc-700 active:scale-[0.99]">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate font-semibold">{c.name}</p>
+                            <span className={`shrink-0 text-sm font-bold ${textColor(pct)}`}>{pct}%</span>
+                          </div>
+                          <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2" />
+                          <div className="mt-2 flex items-center justify-between text-xs">
+                            <span className="text-zinc-400">
+                              {formatBRL(c.spent_cents)} <span className="text-zinc-600">/ {formatBRL(c.budget_cents)}</span>
+                            </span>
+                            <span className={left < 0 ? 'text-red-400' : 'text-zinc-500'}>
+                              {left < 0 ? `Excedeu ${formatBRL(-left)}` : `Resta ${formatBRL(left)}`}
+                            </span>
+                          </div>
+                        </Card>
+                      </Link>
+                    );
+                  })}
+              </div>
+            )}
           </div>
 
-          {data.categories.length === 0 ? (
-            <Card className="text-center text-sm text-zinc-500">
-              Nenhuma categoria ainda.{' '}
-              <Link to="/orcamento" className="text-emerald-400">
-                Crie seu orçamento
-              </Link>
-              .
-            </Card>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {data.categories.map((c) => {
-                const pct = percent(c.spent_cents, c.budget_cents);
-                const left = c.budget_cents - c.spent_cents;
-                return (
-                  <Link key={c.id} to={`/lancar?categoria=${c.id}`} className="block">
-                    <Card className="transition hover:border-zinc-700 active:scale-[0.99]">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate font-semibold">{c.name}</p>
-                        <span className={`shrink-0 text-sm font-bold ${textColor(pct)}`}>{pct}%</span>
-                      </div>
-                      <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2" />
-                      <div className="mt-2 flex items-center justify-between text-xs">
-                        <span className="text-zinc-400">
-                          {formatBRL(c.spent_cents)} <span className="text-zinc-600">/ {formatBRL(c.budget_cents)}</span>
-                        </span>
-                        <span className={left < 0 ? 'text-red-400' : 'text-zinc-500'}>
-                          {left < 0 ? `Excedeu ${formatBRL(-left)}` : `Resta ${formatBRL(left)}`}
-                        </span>
-                      </div>
-                    </Card>
-                  </Link>
-                );
-              })}
+          {/* ================= CATEGORIAS VARIÁVEIS (POR FORA) ================= */}
+          <div className="space-y-3 pt-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-purple-500" />
+                  <h2 className="text-base font-bold text-zinc-100">Categorias Variáveis</h2>
+                  <span className="rounded-md bg-purple-500/10 px-2 py-0.5 text-[10px] font-semibold text-purple-300 border border-purple-500/20">
+                    Consomem do Por Fora
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Não possuem limite individual, consomem o saldo livre "Por Fora"
+                </p>
+              </div>
             </div>
-          )}
+
+            {/* Card Resumo do 'Por Fora' */}
+            <div className="rounded-2xl border border-purple-500/30 bg-gradient-to-br from-zinc-950 via-zinc-950 to-purple-950/25 p-4 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-900 pb-3">
+                <div>
+                  <p className="text-xs text-purple-300 uppercase font-semibold tracking-wider">
+                    Saldo "Por Fora" (Ganhos − Gastos Fixos)
+                  </p>
+                  <p className="text-2xl font-bold tracking-tight text-white mt-0.5">
+                    {formatBRL(data.por_fora_budget_cents)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-zinc-400">Consumido pelas variáveis:</p>
+                  <p className="text-base font-bold text-purple-300">
+                    {formatBRL(data.por_fora_spent_cents)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Barra de Progresso do Por Fora */}
+              <div className="mt-3">
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-zinc-400">
+                    {data.por_fora_budget_cents > 0
+                      ? `${percent(data.por_fora_spent_cents, data.por_fora_budget_cents)}% do Por Fora consumido`
+                      : 'Sem saldo de por fora'}
+                  </span>
+                  <span className={data.por_fora_remaining_cents < 0 ? 'text-red-400 font-bold' : 'text-emerald-400 font-semibold'}>
+                    {data.por_fora_remaining_cents < 0
+                      ? `Estourou ${formatBRL(-data.por_fora_remaining_cents)}`
+                      : `${formatBRL(data.por_fora_remaining_cents)} livre`}
+                  </span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      data.por_fora_remaining_cents < 0 ? 'bg-red-500' : 'bg-purple-500'
+                    }`}
+                    style={{
+                      width: `${data.por_fora_budget_cents > 0 ? Math.min(100, Math.round((data.por_fora_spent_cents / data.por_fora_budget_cents) * 100)) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Grid das Categorias Variáveis com o consumo de cada uma */}
+            {data.categories.filter((c) => c.is_fixed === 0).length === 0 ? (
+              <Card className="text-center text-sm text-zinc-500">
+                Nenhuma categoria variável cadastrada.{' '}
+                <Link to="/orcamento" className="text-purple-400">
+                  Criar categoria variável
+                </Link>
+                .
+              </Card>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {data.categories
+                  .filter((c) => c.is_fixed === 0)
+                  .map((c) => {
+                    const sharePct =
+                      data.por_fora_budget_cents > 0
+                        ? Math.round((c.spent_cents / data.por_fora_budget_cents) * 100)
+                        : 0;
+                    return (
+                      <Link key={c.id} to={`/lancar?categoria=${c.id}`} className="block">
+                        <Card className="transition hover:border-purple-500/40 active:scale-[0.99] border-zinc-800/80">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-zinc-100">{c.name}</p>
+                              <p className="text-[11px] text-zinc-500">
+                                {c.count} {c.count === 1 ? 'gasto registrado' : 'gastos registrados'}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold text-base text-purple-300 tabular-nums">
+                                {formatBRL(c.spent_cents)}
+                              </p>
+                              {data.por_fora_budget_cents > 0 && c.spent_cents > 0 && (
+                                <p className="text-[10px] text-purple-400/80">
+                                  {sharePct}% do Por Fora
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {c.spent_cents > 0 && data.por_fora_budget_cents > 0 && (
+                            <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-900">
+                              <div
+                                className="h-full bg-purple-500/70 rounded-full"
+                                style={{ width: `${Math.min(100, sharePct)}%` }}
+                              />
+                            </div>
+                          )}
+                        </Card>
+                      </Link>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
         </>
       )}
 

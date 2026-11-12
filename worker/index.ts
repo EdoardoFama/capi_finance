@@ -497,7 +497,7 @@ app.delete('/incomes/:id', async (c) => {
 // ---------- categorias / gastos previstos ----------
 app.get('/categories', async (c) => {
   const { results } = await c.env.DB.prepare(
-    'SELECT id, name, budget_cents, note, sort_order FROM categories WHERE user_id = ? ORDER BY sort_order, id',
+    'SELECT id, name, budget_cents, note, sort_order, COALESCE(is_fixed, 1) AS is_fixed FROM categories WHERE user_id = ? ORDER BY is_fixed DESC, sort_order, id',
   )
     .bind(c.get('userId'))
     .all();
@@ -509,14 +509,15 @@ app.post('/categories', async (c) => {
   const name = str(data.name, 'nome')!;
   const budget = cents(data.budget_cents, 'valor')!;
   const note = str(data.note ?? '', 'observação', { required: false, max: 200 }) ?? '';
+  const isFixed = data.is_fixed === 0 || data.is_fixed === false ? 0 : 1;
   const uid = c.get('userId');
   const row = await guardUnique(() =>
     c.env.DB.prepare(
-      `INSERT INTO categories (user_id, name, budget_cents, note, sort_order)
-       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories WHERE user_id = ?))
-       RETURNING id, name, budget_cents, note, sort_order`,
+      `INSERT INTO categories (user_id, name, budget_cents, note, sort_order, is_fixed)
+       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories WHERE user_id = ?), ?)
+       RETURNING id, name, budget_cents, note, sort_order, is_fixed`,
     )
-      .bind(uid, name, budget, note, uid)
+      .bind(uid, name, budget, note, uid, isFixed)
       .first(),
   );
   return c.json(row, 201);
@@ -528,13 +529,14 @@ app.put('/categories/:id', async (c) => {
   const name = str(data.name, 'nome', { required: false });
   const budget = cents(data.budget_cents, 'valor', { required: false });
   const note = str(data.note, 'observação', { required: false, max: 200 });
+  const isFixed = data.is_fixed !== undefined ? (data.is_fixed ? 1 : 0) : null;
   const row = await guardUnique(() =>
     c.env.DB.prepare(
       `UPDATE categories SET name = COALESCE(?, name), budget_cents = COALESCE(?, budget_cents),
-       note = COALESCE(?, note) WHERE id = ? AND user_id = ?
-       RETURNING id, name, budget_cents, note, sort_order`,
+       note = COALESCE(?, note), is_fixed = COALESCE(?, is_fixed) WHERE id = ? AND user_id = ?
+       RETURNING id, name, budget_cents, note, sort_order, is_fixed`,
     )
-      .bind(name ?? null, budget ?? null, note ?? null, id, c.get('userId'))
+      .bind(name ?? null, budget ?? null, note ?? null, isFixed, id, c.get('userId'))
       .first(),
   );
   if (!row) bad('Categoria não encontrada', 404);
@@ -671,6 +673,7 @@ app.put('/expenses/:id', async (c) => {
   const id = idParam(c.req.param('id'));
   const data = await body(c);
   const uid = c.get('userId');
+  const allInstallments = c.req.query('all_installments') === 'true';
   const categoryId = cents(data.category_id, 'categoria', { required: false, min: 1 });
   const amount = cents(data.amount_cents, 'valor', { required: false, min: 1 });
   const title = str(data.title, 'título', { required: false, max: 120 });
@@ -685,6 +688,23 @@ app.put('/expenses/:id', async (c) => {
   const rawMethod = typeof data.payment_method === 'string' && ['debit', 'pix', 'credit', 'voucher'].includes(data.payment_method)
     ? data.payment_method
     : null;
+
+  const current = await c.env.DB.prepare('SELECT installment_group_id FROM expenses WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .first<{ installment_group_id: string | null }>();
+  if (!current) bad('Lançamento não encontrado', 404);
+
+  if (allInstallments && current.installment_group_id) {
+    await c.env.DB.prepare(
+      `UPDATE expenses SET category_id = COALESCE(?, category_id),
+       title = COALESCE(?, title),
+       account_id = COALESCE(?, account_id),
+       payment_method = COALESCE(?, payment_method)
+       WHERE installment_group_id = ? AND user_id = ?`,
+    )
+      .bind(categoryId ?? null, title ?? null, rawAccount, rawMethod, current.installment_group_id, uid)
+      .run();
+  }
 
   const updated = await c.env.DB.prepare(
     `UPDATE expenses SET category_id = COALESCE(?, category_id), amount_cents = COALESCE(?, amount_cents),
@@ -728,17 +748,17 @@ app.get('/dashboard', async (c) => {
 
   const [cats, inc] = await c.env.DB.batch<Record<string, number | string>>([
     c.env.DB.prepare(
-      `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order,
+      `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order, COALESCE(c.is_fixed, 1) AS is_fixed,
               COALESCE(SUM(e.amount_cents), 0) AS spent_cents, COUNT(e.id) AS count
        FROM categories c
        LEFT JOIN expenses e ON e.category_id = c.id AND e.spent_on >= ? AND e.spent_on < ?
        WHERE c.user_id = ?
-       GROUP BY c.id ORDER BY c.sort_order, c.id`,
+       GROUP BY c.id ORDER BY c.is_fixed DESC, c.sort_order, c.id`,
     ).bind(start, end, uid),
     c.env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM incomes WHERE user_id = ?').bind(uid),
   ]);
 
-  const categories = cats.results as unknown as { budget_cents: number; spent_cents: number }[];
+  const categories = cats.results as unknown as { id: number; name: string; budget_cents: number; note: string; sort_order: number; is_fixed: number; spent_cents: number; count: number }[];
 
   // 1. Balances definidos pelo usuário (prioriza o mês atual, fallback para o mais recente)
   const { results: balanceRows } = await c.env.DB.prepare(
@@ -790,11 +810,29 @@ app.get('/dashboard', async (c) => {
     };
   });
 
+  const totalIncomeCents = Number(inc.results[0]?.total ?? 0);
+  const fixedCats = categories.filter((c) => c.is_fixed === 1);
+  const variableCats = categories.filter((c) => c.is_fixed === 0);
+
+  const fixedBudgetCents = fixedCats.reduce((s, x) => s + x.budget_cents, 0);
+  const fixedSpentCents = fixedCats.reduce((s, x) => s + x.spent_cents, 0);
+  const variableSpentCents = variableCats.reduce((s, x) => s + x.spent_cents, 0);
+
+  const porForaBudgetCents = totalIncomeCents - fixedBudgetCents;
+  const porForaSpentCents = variableSpentCents;
+  const porForaRemainingCents = porForaBudgetCents - porForaSpentCents;
+
   return c.json({
     month,
-    total_income_cents: Number(inc.results[0]?.total ?? 0),
-    total_budget_cents: categories.reduce((s, x) => s + x.budget_cents, 0),
-    total_spent_cents: categories.reduce((s, x) => s + x.spent_cents, 0),
+    total_income_cents: totalIncomeCents,
+    total_budget_cents: fixedBudgetCents,
+    total_spent_cents: fixedSpentCents + variableSpentCents,
+    fixed_budget_cents: fixedBudgetCents,
+    fixed_spent_cents: fixedSpentCents,
+    variable_spent_cents: variableSpentCents,
+    por_fora_budget_cents: porForaBudgetCents,
+    por_fora_spent_cents: porForaSpentCents,
+    por_fora_remaining_cents: porForaRemainingCents,
     categories,
     accounts,
   });
@@ -918,6 +956,147 @@ app.get('/export', async (c) => {
     investment_accounts: accounts.results,
     investment_snapshots: snapshots.results,
   });
+});
+
+// ---------- cartão de crédito & faturas ----------
+app.get('/credit-card/invoice', async (c) => {
+  const uid = c.get('userId');
+  const monthParam = c.req.query('month');
+  const [start, end] = monthRange(monthParam);
+  const month = monthParam!;
+
+  const { results: expenses } = await c.env.DB.prepare(
+    `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.payment_method = 'credit' AND e.spent_on >= ? AND e.spent_on < ?
+     ORDER BY e.spent_on DESC, e.id DESC`,
+  )
+    .bind(uid, start, end)
+    .all();
+
+  const totalCents = expenses.reduce((s, x) => s + Number(x.amount_cents || 0), 0);
+
+  const invoice = await c.env.DB.prepare(
+    `SELECT is_paid, paid_at, paid_amount_cents FROM credit_card_invoices WHERE user_id = ? AND month = ?`,
+  )
+    .bind(uid, month)
+    .first<{ is_paid: number; paid_at: string | null; paid_amount_cents: number }>();
+
+  const nubankRow = await c.env.DB.prepare(
+    `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY updated_at DESC LIMIT 1`,
+  )
+    .bind(uid)
+    .first<{ initial_cents: number }>();
+
+  return c.json({
+    month,
+    total_cents: totalCents,
+    count: expenses.length,
+    is_paid: Boolean(invoice?.is_paid),
+    paid_at: invoice?.paid_at ?? null,
+    paid_amount_cents: invoice?.paid_amount_cents ?? 0,
+    nubank_balance_cents: nubankRow?.initial_cents ?? 0,
+    expenses,
+  });
+});
+
+app.post('/credit-card/pay', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const month = str(data.month, 'mês')!;
+  const [start, end] = monthRange(month);
+
+  const existing = await c.env.DB.prepare(
+    `SELECT is_paid FROM credit_card_invoices WHERE user_id = ? AND month = ?`,
+  )
+    .bind(uid, month)
+    .first<{ is_paid: number }>();
+
+  if (existing?.is_paid) bad('Esta fatura já está marcada como paga');
+
+  const totalRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
+     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+  )
+    .bind(uid, start, end)
+    .first<{ total: number }>();
+
+  const totalCents = totalRow?.total ?? 0;
+  if (totalCents <= 0) bad('Não há despesas no cartão nesta fatura para pagar');
+
+  // Abater do saldo da conta Nubank
+  const nubankBalance = await c.env.DB.prepare(
+    `SELECT id, month, initial_cents FROM account_balances
+     WHERE user_id = ? AND account_id = 'nubank'
+     ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
+  )
+    .bind(uid, month)
+    .first<{ id: number; month: string; initial_cents: number }>();
+
+  if (nubankBalance) {
+    const newBalance = Math.max(0, nubankBalance.initial_cents - totalCents);
+    await c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(newBalance, nubankBalance.id)
+      .run();
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+       VALUES (?, ?, 'nubank', 0, datetime('now'))`,
+    )
+      .bind(uid, month)
+      .run();
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO credit_card_invoices (user_id, month, is_paid, paid_at, paid_amount_cents)
+     VALUES (?, ?, 1, datetime('now'), ?)
+     ON CONFLICT(user_id, month)
+     DO UPDATE SET is_paid = 1, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
+  )
+    .bind(uid, month, totalCents)
+    .run();
+
+  return c.json({ ok: true, month, paid_amount_cents: totalCents });
+});
+
+app.post('/credit-card/reopen', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const month = str(data.month, 'mês')!;
+
+  const existing = await c.env.DB.prepare(
+    `SELECT is_paid, paid_amount_cents FROM credit_card_invoices WHERE user_id = ? AND month = ?`,
+  )
+    .bind(uid, month)
+    .first<{ is_paid: number; paid_amount_cents: number }>();
+
+  if (!existing || !existing.is_paid) bad('Esta fatura não está paga');
+
+  // Restaurar o valor abatido no saldo da Nubank
+  const nubankBalance = await c.env.DB.prepare(
+    `SELECT id, initial_cents FROM account_balances
+     WHERE user_id = ? AND account_id = 'nubank'
+     ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
+  )
+    .bind(uid, month)
+    .first<{ id: number; initial_cents: number }>();
+
+  if (nubankBalance) {
+    const restored = nubankBalance.initial_cents + (existing.paid_amount_cents || 0);
+    await c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(restored, nubankBalance.id)
+      .run();
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE credit_card_invoices SET is_paid = 0, paid_at = NULL, paid_amount_cents = 0 WHERE user_id = ? AND month = ?`,
+  )
+    .bind(uid, month)
+    .run();
+
+  return c.json({ ok: true, month });
 });
 
 export default app;

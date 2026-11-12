@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Home from './pages/Home';
 import Budget from './pages/Budget';
 import Expenses from './pages/Expenses';
+import CreditCard from './pages/CreditCard';
 import History from './pages/History';
 import Investments from './pages/Investments';
 import Admin from './pages/Admin';
@@ -18,6 +19,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="orcamento" element={<Budget />} />
         <Route path="lancar" element={<Expenses />} />
+        <Route path="cartao" element={<CreditCard />} />
         <Route path="extrato" element={<History />} />
         <Route path="investimentos" element={<Investments />} />
         {user.is_admin && <Route path="admin" element={<Admin />} />}

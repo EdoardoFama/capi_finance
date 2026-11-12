@@ -3,8 +3,9 @@ import { Link } from 'react-router';
 import { api, type Category, type Expense } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
-import { Card, IconPlus, IconTrash, MonthPicker, PageTitle, Spinner } from '../components/ui';
+import { Card, IconEdit, IconPlus, IconTrash, MonthPicker, PageTitle, Spinner } from '../components/ui';
 import { exportCsv, exportPdf, fetchExportData } from '../export';
+import EditExpenseModal from '../components/EditExpenseModal';
 
 export default function History() {
   const { month } = useMonth();
@@ -33,6 +34,7 @@ export default function History() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -97,13 +99,13 @@ export default function History() {
     return filtered.reduce((acc, curr) => acc + curr.amount_cents, 0);
   }, [filtered]);
 
-  // Agrupamento por dia
+  // Agrupamento por dia (ordenado do mais recente pro mais antigo)
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>();
     for (const e of filtered) {
       map.set(e.spent_on, [...(map.get(e.spent_on) ?? []), e]);
     }
-    return [...map.entries()];
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [filtered]);
 
   return (
@@ -299,6 +301,14 @@ export default function History() {
                       {formatBRL(exp.amount_cents)}
                     </span>
                     <button
+                      onClick={() => setEditingExpense(exp)}
+                      className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                      title="Editar lançamento"
+                      aria-label="Editar"
+                    >
+                      <IconEdit className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={() => remove(exp)}
                       className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
                       title="Excluir gasto"
@@ -313,6 +323,15 @@ export default function History() {
           ))}
         </div>
       )}
+
+      {/* Modal de Edição */}
+      <EditExpenseModal
+        expense={editingExpense}
+        categories={categories}
+        isOpen={Boolean(editingExpense)}
+        onClose={() => setEditingExpense(null)}
+        onSaved={load}
+      />
     </div>
   );
 }
