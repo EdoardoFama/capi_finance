@@ -725,7 +725,8 @@ app.get('/dashboard', async (c) => {
   const month = c.req.query('month') || new Date().toISOString().slice(0, 7);
   const [start, end] = monthRange(month);
   const uid = c.get('userId');
-  const [cats, inc, balancesRes, spentPerAccountRes] = await c.env.DB.batch<Record<string, number | string>>([
+
+  const [cats, inc] = await c.env.DB.batch<Record<string, number | string>>([
     c.env.DB.prepare(
       `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order,
               COALESCE(SUM(e.amount_cents), 0) AS spent_cents, COUNT(e.id) AS count
@@ -735,31 +736,50 @@ app.get('/dashboard', async (c) => {
        GROUP BY c.id ORDER BY c.sort_order, c.id`,
     ).bind(start, end, uid),
     c.env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM incomes WHERE user_id = ?').bind(uid),
-    c.env.DB.prepare(
-      'SELECT account_id, initial_cents FROM account_balances WHERE user_id = ? AND month = ?',
-    ).bind(uid, month),
-    c.env.DB.prepare(
-      `SELECT COALESCE(account_id, 'nubank') AS account_id, COALESCE(SUM(amount_cents), 0) AS spent_cents
-       FROM expenses
-       WHERE user_id = ? AND spent_on >= ? AND spent_on < ?
-       GROUP BY COALESCE(account_id, 'nubank')`,
-    ).bind(uid, start, end),
   ]);
 
   const categories = cats.results as unknown as { budget_cents: number; spent_cents: number }[];
 
-  const balancesMap: Record<string, number> = {};
-  for (const row of (balancesRes?.results ?? []) as unknown as { account_id: string; initial_cents: number }[]) {
-    balancesMap[row.account_id] = row.initial_cents;
+  // 1. Balances definidos pelo usuário (prioriza o mês atual, fallback para o mais recente)
+  const { results: balanceRows } = await c.env.DB.prepare(
+    `SELECT account_id, month, initial_cents, updated_at
+     FROM account_balances
+     WHERE user_id = ?
+     ORDER BY updated_at DESC`,
+  ).bind(uid).all<{ account_id: string; month: string; initial_cents: number; updated_at: string }>();
+
+  const balancesMap: Record<string, { initial_cents: number; updated_at: string }> = {};
+  for (const b of balanceRows) {
+    if (!balancesMap[b.account_id]) {
+      balancesMap[b.account_id] = { initial_cents: b.initial_cents, updated_at: b.updated_at };
+    } else if (b.month === month) {
+      balancesMap[b.account_id] = { initial_cents: b.initial_cents, updated_at: b.updated_at };
+    }
   }
 
+  // 2. Gastos que foram criados APENAS APÓS a data/hora em que o saldo daquela conta foi definido
+  // (gastos passados já existentes na conta não são abatidos)
   const spentMap: Record<string, number> = {};
-  for (const row of (spentPerAccountRes?.results ?? []) as unknown as { account_id: string; spent_cents: number }[]) {
-    spentMap[row.account_id] = row.spent_cents;
+  for (const accId of VALID_ACCOUNTS) {
+    const b = balancesMap[accId];
+    if (b && b.initial_cents > 0 && b.updated_at) {
+      const row = await c.env.DB.prepare(
+        `SELECT COALESCE(SUM(amount_cents), 0) AS total
+         FROM expenses
+         WHERE user_id = ?
+           AND COALESCE(account_id, 'nubank') = ?
+           AND created_at >= ?`,
+      )
+        .bind(uid, accId, b.updated_at)
+        .first<{ total: number }>();
+      spentMap[accId] = row?.total ?? 0;
+    } else {
+      spentMap[accId] = 0;
+    }
   }
 
   const accounts = VALID_ACCOUNTS.map((accId) => {
-    const initial_cents = balancesMap[accId] ?? 0;
+    const initial_cents = balancesMap[accId]?.initial_cents ?? 0;
     const spent_cents = spentMap[accId] ?? 0;
     return {
       account_id: accId,

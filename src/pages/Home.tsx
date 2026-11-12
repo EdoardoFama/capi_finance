@@ -100,7 +100,11 @@ function AccountCard({
           </div>
           <div className="mt-1 flex items-center justify-between text-[10px] text-zinc-500">
             <span>{spentPct}% consumido</span>
-            <span>{account.initial_cents > 0 ? `${formatBRL(account.current_cents)} livre` : ''}</span>
+            <span>
+              {account.initial_cents > 0
+                ? `${formatBRL(account.current_cents)} livre`
+                : 'Defina o saldo'}
+            </span>
           </div>
         </div>
       </div>
@@ -130,8 +134,10 @@ function AccountCard({
         </div>
 
         <div className="flex items-center justify-between text-[11px] text-zinc-500">
-          <span>Gastos no mês:</span>
-          <span className="font-medium text-zinc-400">-{formatBRL(account.spent_cents)}</span>
+          <span>Gastos abatidos:</span>
+          <span className="font-medium text-zinc-400">
+            {account.spent_cents > 0 ? `-${formatBRL(account.spent_cents)}` : formatBRL(0)}
+          </span>
         </div>
       </div>
     </Card>
@@ -163,7 +169,8 @@ export default function Home() {
           return {
             ...acc,
             initial_cents: newInitialCents,
-            current_cents: newInitialCents - acc.spent_cents,
+            spent_cents: 0,
+            current_cents: newInitialCents,
           };
         }
         return acc;
