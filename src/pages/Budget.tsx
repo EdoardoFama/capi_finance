@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type Category, type Income } from '../api';
 import { useToast } from '../context';
 import { centsToInput, formatBRL, parseBRL } from '../format';
 import { Card, IconPlus, IconTrash, Input, PageTitle, Spinner } from '../components/ui';
+import DistributionChart from '../components/DistributionChart';
 
 /* =========================================================
    LINHA DE GANHO (Nome + Valor na mesma linha + Excluir)
@@ -420,6 +421,13 @@ export default function Budget() {
   const displayedCats =
     catFilter === 'fixed' ? fixedCats : catFilter === 'variable' ? variableCats : cats;
 
+  const budgetDistributionItems = useMemo(() => {
+    return (cats ?? []).map((c) => ({
+      name: c.name,
+      amount_cents: c.budget_cents,
+    }));
+  }, [cats]);
+
   return (
     <div className="space-y-4">
       <PageTitle title="Orçamento Pessoal" subtitle="Sua meta mensal. Os gastos previstos viram o teto de cada categoria." />
@@ -441,6 +449,13 @@ export default function Budget() {
           </p>
         </Card>
       </div>
+
+      {/* Dashboard de Distribuição do Orçamento */}
+      <DistributionChart
+        title="Distribuição do Orçamento Previsto"
+        subtitle="Representatividade percentual e cores de cada categoria no orçamento estipulado"
+        items={budgetDistributionItems}
+      />
 
       {/* Seção Ganhos */}
       <Card>

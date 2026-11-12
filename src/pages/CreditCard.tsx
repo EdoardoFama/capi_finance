@@ -5,6 +5,7 @@ import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import { Card, IconCreditCard, IconEdit, IconPlus, IconTrash, MonthPicker, PageTitle, Spinner } from '../components/ui';
 import EditExpenseModal from '../components/EditExpenseModal';
+import DistributionChart from '../components/DistributionChart';
 
 export default function CreditCard() {
   const { month } = useMonth();
@@ -122,6 +123,20 @@ export default function CreditCard() {
   const totalFiltered = useMemo(() => {
     return filtered.reduce((acc, curr) => acc + curr.amount_cents, 0);
   }, [filtered]);
+
+  // Distribuição dos gastos da fatura por categoria
+  const invoiceCategoryDistribution = useMemo(() => {
+    if (!invoice?.expenses) return [];
+    const map = new Map<string, number>();
+    for (const exp of invoice.expenses) {
+      const catName = exp.category_name || 'Outros';
+      map.set(catName, (map.get(catName) ?? 0) + exp.amount_cents);
+    }
+    return [...map.entries()].map(([name, amount_cents]) => ({
+      name,
+      amount_cents,
+    }));
+  }, [invoice]);
 
   // Agrupamento por dia (ordenado do mais recente pro mais antigo)
   const grouped = useMemo(() => {
@@ -305,6 +320,15 @@ export default function CreditCard() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Dashboard de Distribuição da Fatura */}
+          {invoiceTotal > 0 && (
+            <DistributionChart
+              title="Distribuição da Fatura por Categoria"
+              subtitle="Categorias, cores e porcentagens representadas nesta fatura"
+              items={invoiceCategoryDistribution}
+            />
           )}
 
           {/* Filtros da lista */}
