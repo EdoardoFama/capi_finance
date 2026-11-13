@@ -95,6 +95,18 @@ export default function Investments() {
     [data],
   );
 
+  // Snapshot mais recente registrado de uma conta
+  const getAccountLatestSnapshot = useCallback(
+    (accountId: number): InvestmentSnapshot | undefined => {
+      if (!data) return undefined;
+      const pastSnaps = data.snapshots
+        .filter((s) => s.account_id === accountId)
+        .sort((a, b) => b.month.localeCompare(a.month));
+      return pastSnaps[0];
+    },
+    [data],
+  );
+
   // Saldo anterior a um mês de referência
   const getPreviousBalance = useCallback(
     (accountId: number, beforeMonth: string): number => {
@@ -238,6 +250,9 @@ export default function Investments() {
       return toast(`O valor informado excede o saldo disponível (${formatBRL(currentBal)})`, 'error');
     }
 
+    const targetSnap = getAccountLatestSnapshot(redeemAccountId);
+    const snapMonth = targetSnap?.month || activeLatestMonth || redeemDate.slice(0, 7);
+
     setRedeeming(true);
     try {
       const res = await api<RedeemResult>('/investments/redeem', {
@@ -246,7 +261,8 @@ export default function Investments() {
           account_id: redeemAccountId,
           destination_account_id: redeemDestAccount || 'nubank',
           amount_cents: amountCents,
-          month: redeemDate.slice(0, 7),
+          month: snapMonth,
+          snapshot_month: snapMonth,
           date: redeemDate,
         },
       });
@@ -859,8 +875,7 @@ export default function Investments() {
                 >
                   {isRedeemOverLimit ? (
                     <p className="font-bold text-red-400">
-                      ⚠️ O valor a sacar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível (
-                      {formatBRL(selectedRedeemBal)}).
+                      ⚠️ O valor a sacar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível na corretora ({formatBRL(selectedRedeemBal)}).
                     </p>
                   ) : (
                     <>

@@ -172,47 +172,8 @@ app.post('/auth/signup/confirm', async (c) => {
     .bind(username, email, password_hash)
     .first<{ id: number }>())!;
 
-  // Cria o orçamento padrão para o novo usuário
-  const defaultIncomes = [
-    ['SALÁRIO', 500000],
-    ['OUTROS', 50000],
-  ];
-  const defaultCategories = [
-    ['FEIRA', 100000],
-    ['LANCHE/ETC', 30000],
-    ['CARRO', 50000],
-    ['CASA', 80000],
-    ['FARMÁCIA', 15000],
-    ['OUTROS', 20000],
-  ];
-
-  const batchStmts: D1PreparedStatement[] = [
-    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email),
-  ];
-
-  defaultIncomes.forEach(([name, centsVal], i) => {
-    batchStmts.push(
-      c.env.DB.prepare('INSERT INTO incomes (user_id, name, amount_cents, sort_order) VALUES (?, ?, ?, ?)').bind(
-        newUserId,
-        name,
-        centsVal,
-        i + 1,
-      ),
-    );
-  });
-
-  defaultCategories.forEach(([name, centsVal], i) => {
-    batchStmts.push(
-      c.env.DB.prepare('INSERT INTO categories (user_id, name, budget_cents, note, sort_order) VALUES (?, ?, ?, "", ?)').bind(
-        newUserId,
-        name,
-        centsVal,
-        i + 1,
-      ),
-    );
-  });
-
-  await c.env.DB.batch(batchStmts);
+  // Deleta o código de verificação
+  await c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run();
 
   // Cria sessão e autentica direto
   const token = randomToken();
@@ -1130,64 +1091,70 @@ app.post('/investments/redeem', async (c) => {
   const accountId = idParam(String(data.account_id));
   const amount = cents(data.amount_cents, 'valor de resgate', { min: 1 })!;
 
-  const monthParam = typeof data.month === 'string' && /^\d{4}-\d{2}$/.test(data.month)
-    ? data.month
-    : new Date().toISOString().slice(0, 7);
-
   const dateParam = typeof data.date === 'string' && isDate(data.date)
     ? data.date
     : new Date().toISOString().slice(0, 10);
 
-  // 1. Verifica se a conta de investimento existe e pertence ao usuário
+  // 1. Verifica se a corretora de investimento existe e pertence ao usuário
   const invAccount = await c.env.DB.prepare(
     'SELECT id, name FROM investment_accounts WHERE id = ? AND user_id = ?',
   )
     .bind(accountId, uid)
     .first<{ id: number; name: string }>();
 
-  if (!invAccount) bad('Conta de investimento não encontrada', 404);
+  if (!invAccount) bad('Corretora de investimento não encontrada', 404);
 
-  // 2. Busca o saldo atual dessa conta
-  const currentSnap = await c.env.DB.prepare(
-    `SELECT balance_cents, delta_cents FROM investment_snapshots
-     WHERE user_id = ? AND account_id = ? AND month = ?`,
+  // 2. Busca o snapshot mais recente dessa corretora para saber o saldo real atual
+  const latestSnap = await c.env.DB.prepare(
+    `SELECT month, balance_cents, delta_cents FROM investment_snapshots
+     WHERE user_id = ? AND account_id = ?
+     ORDER BY month DESC LIMIT 1`,
   )
-    .bind(uid, accountId, monthParam)
-    .first<{ balance_cents: number; delta_cents: number }>();
+    .bind(uid, accountId)
+    .first<{ month: string; balance_cents: number; delta_cents: number }>();
 
-  let startingBalance = 0;
-  let startingDelta = 0;
+  if (!latestSnap || latestSnap.balance_cents <= 0) {
+    bad(`A corretora ${invAccount.name} não possui saldo disponível para resgate`, 400);
+  }
 
-  if (currentSnap) {
-    startingBalance = currentSnap.balance_cents;
-    startingDelta = currentSnap.delta_cents;
-  } else {
-    const prevSnap = await c.env.DB.prepare(
-      `SELECT balance_cents FROM investment_snapshots
-       WHERE user_id = ? AND account_id = ? AND month < ?
-       ORDER BY month DESC LIMIT 1`,
+  // Verifica se foi solicitado um mês específico que tenha saldo suficiente
+  const requestedMonth = typeof data.snapshot_month === 'string' && /^\d{4}-\d{2}$/.test(data.snapshot_month)
+    ? data.snapshot_month
+    : typeof data.month === 'string' && /^\d{4}-\d{2}$/.test(data.month)
+      ? data.month
+      : undefined;
+
+  let snapToUpdate = latestSnap;
+
+  if (requestedMonth) {
+    const specifiedSnap = await c.env.DB.prepare(
+      `SELECT month, balance_cents, delta_cents FROM investment_snapshots
+       WHERE user_id = ? AND account_id = ? AND month = ?`,
     )
-      .bind(uid, accountId, monthParam)
-      .first<{ balance_cents: number }>();
+      .bind(uid, accountId, requestedMonth)
+      .first<{ month: string; balance_cents: number; delta_cents: number }>();
 
-    startingBalance = prevSnap?.balance_cents ?? 0;
-    startingDelta = 0;
+    // Se o mês requisitado tiver saldo suficiente para o resgate, usa ele;
+    // caso contrário, mantém latestSnap (onde o saldo mais recente foi verificado)
+    if (specifiedSnap && specifiedSnap.balance_cents >= amount) {
+      snapToUpdate = specifiedSnap;
+    }
   }
 
-  if (startingBalance <= 0) {
-    bad(`A conta ${invAccount.name} não possui saldo disponível para resgate`, 400);
-  }
-  if (amount > startingBalance) {
+  const availableBalance = snapToUpdate.balance_cents;
+
+  if (amount > availableBalance) {
     bad(
-      `O valor a resgatar (${(amount / 100).toFixed(2).replace('.', ',')}) é maior que o saldo disponível na conta (${(startingBalance / 100).toFixed(2).replace('.', ',')})`,
+      `O valor a resgatar (${(amount / 100).toFixed(2).replace('.', ',')}) é maior que o saldo disponível na corretora ${invAccount.name} (${(availableBalance / 100).toFixed(2).replace('.', ',')})`,
       400,
     );
   }
 
-  const newBalance = startingBalance - amount;
-  const newDelta = startingDelta - amount;
+  const newBalance = snapToUpdate.balance_cents - amount;
+  const newDelta = snapToUpdate.delta_cents - amount;
+  const targetMonth = snapToUpdate.month;
 
-  // 3. Atualiza o snapshot da conta de investimento abatendo o valor
+  // 3. Atualiza o snapshot da corretora abatendo o valor
   await c.env.DB.prepare(
     `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
      VALUES (?, ?, ?, ?, ?)
@@ -1195,7 +1162,7 @@ app.post('/investments/redeem', async (c) => {
        balance_cents = excluded.balance_cents,
        delta_cents = excluded.delta_cents`,
   )
-    .bind(uid, accountId, monthParam, newBalance, newDelta)
+    .bind(uid, accountId, targetMonth, newBalance, newDelta)
     .run();
 
   // 4. Determina a conta de destino para crédito do resgate
@@ -1217,15 +1184,19 @@ app.post('/investments/redeem', async (c) => {
       .first<{ slug: string; name: string }>();
     if (fallbackAcc) {
       destAccountId = fallbackAcc.slug;
+    } else {
+      bad('Nenhuma conta de destino encontrada para receber o resgate', 400);
     }
   }
 
-  // Credita o valor resgatado no saldo da conta de destino
+  // O crédito deve ir para o mês da data da transação do resgate
+  const destMonth = dateParam.slice(0, 7);
+
   const destBal = await c.env.DB.prepare(
     `SELECT id, initial_cents FROM account_balances
      WHERE user_id = ? AND account_id = ? AND month = ?`,
   )
-    .bind(uid, destAccountId, monthParam)
+    .bind(uid, destAccountId, destMonth)
     .first<{ id: number; initial_cents: number }>();
 
   if (destBal) {
@@ -1246,7 +1217,7 @@ app.post('/investments/redeem', async (c) => {
       `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
        VALUES (?, ?, ?, ?, datetime('now'))`,
     )
-      .bind(uid, monthParam, destAccountId, baseBal)
+      .bind(uid, destMonth, destAccountId, baseBal)
       .run();
   }
 
@@ -1265,7 +1236,7 @@ app.post('/investments/redeem', async (c) => {
     destination_account: destAccountId,
     redeemed_cents: amount,
     new_balance_cents: newBalance,
-    month: monthParam,
+    month: targetMonth,
   });
 });
 

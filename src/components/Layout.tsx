@@ -107,43 +107,38 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      {/* Navegação Inferior Flutuante (Mobile) */}
-      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-[#060609]/90 backdrop-blur-xl md:hidden">
-        <div className="mx-auto grid max-w-md grid-cols-6 items-center px-1">
+      {/* Navegação Inferior (Mobile) */}
+      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-[#060609]/95 backdrop-blur-xl md:hidden">
+        <div className="mx-auto grid max-w-md grid-cols-6 items-center px-1 py-1.5">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
               className={({ isActive }) =>
-                `relative flex flex-col items-center justify-center gap-1 py-2 text-[10px] font-semibold transition-all ${
-                  isActive ? 'text-emerald-400' : 'text-zinc-500 hover:text-zinc-300'
+                `group relative flex flex-col items-center justify-center py-1 text-[10px] transition-all ${
+                  isActive ? 'text-emerald-400 font-bold' : 'text-zinc-400 hover:text-zinc-200 font-medium'
                 }`
               }
             >
-              {({ isActive }) =>
-                to === '/lancar' ? (
-                  <>
-                    <span
-                      className={`-mt-4 flex h-11 w-11 items-center justify-center rounded-2xl border shadow-lg transition-transform active:scale-95 ${
-                        isActive
-                          ? 'border-emerald-300 bg-emerald-400 text-black shadow-emerald-500/30'
-                          : 'border-emerald-500/40 bg-gradient-to-br from-emerald-400 to-teal-500 text-black shadow-emerald-500/20'
-                      }`}
-                    >
-                      <Icon className="h-5 w-5 stroke-[2.4]" />
-                    </span>
-                    <span className={isActive ? 'text-emerald-400 font-bold' : 'text-zinc-300'}>{label}</span>
-                  </>
-                ) : (
-                  <>
-                    <div className={`relative rounded-xl px-2.5 py-1 transition-all ${isActive ? 'bg-emerald-500/15' : ''}`}>
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <span>{label}</span>
-                  </>
-                )
-              }
+              {({ isActive }) => (
+                <>
+                  <div
+                    className={`flex h-8 w-8 items-center justify-center rounded-xl transition-all ${
+                      isActive
+                        ? to === '/lancar'
+                          ? 'bg-emerald-400 text-black shadow-md shadow-emerald-500/25'
+                          : 'bg-emerald-500/15 text-emerald-400'
+                        : to === '/lancar'
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                        : 'text-zinc-400 group-hover:text-zinc-200'
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <span className="truncate leading-none mt-1">{label}</span>
+                </>
+              )}
             </NavLink>
           ))}
         </div>
