@@ -166,3 +166,21 @@ export type CreditCardInvoice = {
   nubank_balance_cents: number;
   expenses: Expense[];
 };
+
+export type Inflow = {
+  id: number;
+  account_id: AccountId;
+  amount_cents: number;
+  description: string;
+  received_on: string;
+  created_at: string;
+};
+
+export type RedeemResult = {
+  ok: boolean;
+  account_id: number;
+  account_name: string;
+  redeemed_cents: number;
+  new_balance_cents: number;
+  month: string;
+};

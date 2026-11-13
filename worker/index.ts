@@ -740,6 +740,104 @@ app.delete('/expenses/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------- entradas (inflows) ----------
+app.get('/inflows', async (c) => {
+  const [start, end] = monthRange(c.req.query('month'));
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, account_id, amount_cents, description, received_on, created_at
+     FROM inflows
+     WHERE user_id = ? AND received_on >= ? AND received_on < ?
+     ORDER BY received_on DESC, id DESC`,
+  )
+    .bind(c.get('userId'), start, end)
+    .all();
+  return c.json(results);
+});
+
+app.post('/inflows', async (c) => {
+  const data = await body(c);
+  const uid = c.get('userId');
+  const amount = cents(data.amount_cents, 'valor', { min: 1 })!;
+  const description = str(data.description ?? '', 'descrição', { required: false, max: 200 }) ?? '';
+  const receivedOn = str(data.received_on, 'data')!;
+  if (!isDate(receivedOn)) bad('Data inválida');
+
+  const rawAccount = typeof data.account_id === 'string' ? data.account_id : 'nubank';
+  const accountId: AccountId = (VALID_ACCOUNTS as readonly string[]).includes(rawAccount)
+    ? (rawAccount as AccountId)
+    : 'nubank';
+
+  const month = receivedOn.slice(0, 7);
+
+  // 1. Inserir em inflows
+  const { id } = (await c.env.DB.prepare(
+    `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+     VALUES (?, ?, ?, ?, ?) RETURNING id`,
+  )
+    .bind(uid, accountId, amount, description, receivedOn)
+    .first<{ id: number }>())!;
+
+  // 2. Atualizar saldo da conta correspondente (account_balances)
+  const existing = await c.env.DB.prepare(
+    `SELECT id, initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? AND month = ?`,
+  )
+    .bind(uid, accountId, month)
+    .first<{ id: number; initial_cents: number }>();
+
+  if (existing) {
+    await c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(amount, existing.id)
+      .run();
+  } else {
+    const prev = await c.env.DB.prepare(
+      `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? ORDER BY updated_at DESC LIMIT 1`,
+    )
+      .bind(uid, accountId)
+      .first<{ initial_cents: number }>();
+
+    const base = (prev?.initial_cents ?? 0) + amount;
+    await c.env.DB.prepare(
+      `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`,
+    )
+      .bind(uid, month, accountId, base)
+      .run();
+  }
+
+  const row = await c.env.DB.prepare(
+    'SELECT id, account_id, amount_cents, description, received_on, created_at FROM inflows WHERE id = ?',
+  )
+    .bind(id)
+    .first();
+  return c.json(row, 201);
+});
+
+app.delete('/inflows/:id', async (c) => {
+  const id = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+
+  const inflow = await c.env.DB.prepare(
+    'SELECT account_id, amount_cents, received_on FROM inflows WHERE id = ? AND user_id = ?',
+  )
+    .bind(id, uid)
+    .first<{ account_id: string; amount_cents: number; received_on: string }>();
+
+  if (inflow) {
+    const month = inflow.received_on.slice(0, 7);
+    await c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = MAX(0, initial_cents - ?), updated_at = datetime('now')
+       WHERE user_id = ? AND account_id = ? AND month = ?`,
+    )
+      .bind(inflow.amount_cents, uid, inflow.account_id, month)
+      .run();
+
+    await c.env.DB.prepare('DELETE FROM inflows WHERE id = ? AND user_id = ?').bind(id, uid).run();
+  }
+  return c.json({ ok: true });
+});
+
 // ---------- dashboard ----------
 app.get('/dashboard', async (c) => {
   const month = c.req.query('month') || new Date().toISOString().slice(0, 7);
@@ -892,9 +990,22 @@ app.post('/investments/snapshot', async (c) => {
   if (!/^\d{4}-\d{2}$/.test(month)) bad('Formato de mês inválido (use YYYY-MM)');
 
   const balance = cents(data.balance_cents, 'saldo')!;
-  const delta = typeof data.delta_cents === 'number' && Number.isInteger(data.delta_cents)
-    ? data.delta_cents
-    : 0;
+  let delta: number;
+
+  if (typeof data.delta_cents === 'number' && Number.isInteger(data.delta_cents)) {
+    delta = data.delta_cents;
+  } else {
+    // Auto-calcula variação com base no snapshot do mês anterior mais recente
+    const prevSnap = await c.env.DB.prepare(
+      `SELECT balance_cents FROM investment_snapshots
+       WHERE user_id = ? AND account_id = ? AND month < ?
+       ORDER BY month DESC LIMIT 1`,
+    )
+      .bind(uid, accountId, month)
+      .first<{ balance_cents: number }>();
+
+    delta = prevSnap ? balance - prevSnap.balance_cents : 0;
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
@@ -906,7 +1017,129 @@ app.post('/investments/snapshot', async (c) => {
     .bind(uid, accountId, month, balance, delta)
     .run();
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, balance_cents: balance, delta_cents: delta });
+});
+
+app.post('/investments/redeem', async (c) => {
+  const data = await body(c);
+  const uid = c.get('userId');
+  const accountId = idParam(String(data.account_id));
+  const amount = cents(data.amount_cents, 'valor de resgate', { min: 1 })!;
+
+  const monthParam = typeof data.month === 'string' && /^\d{4}-\d{2}$/.test(data.month)
+    ? data.month
+    : new Date().toISOString().slice(0, 7);
+
+  const dateParam = typeof data.date === 'string' && isDate(data.date)
+    ? data.date
+    : new Date().toISOString().slice(0, 10);
+
+  // 1. Verifica se a conta de investimento existe e pertence ao usuário
+  const invAccount = await c.env.DB.prepare(
+    'SELECT id, name FROM investment_accounts WHERE id = ? AND user_id = ?',
+  )
+    .bind(accountId, uid)
+    .first<{ id: number; name: string }>();
+
+  if (!invAccount) bad('Conta de investimento não encontrada', 404);
+
+  // 2. Busca o saldo atual dessa conta
+  const currentSnap = await c.env.DB.prepare(
+    `SELECT balance_cents, delta_cents FROM investment_snapshots
+     WHERE user_id = ? AND account_id = ? AND month = ?`,
+  )
+    .bind(uid, accountId, monthParam)
+    .first<{ balance_cents: number; delta_cents: number }>();
+
+  let startingBalance = 0;
+  let startingDelta = 0;
+
+  if (currentSnap) {
+    startingBalance = currentSnap.balance_cents;
+    startingDelta = currentSnap.delta_cents;
+  } else {
+    const prevSnap = await c.env.DB.prepare(
+      `SELECT balance_cents FROM investment_snapshots
+       WHERE user_id = ? AND account_id = ? AND month < ?
+       ORDER BY month DESC LIMIT 1`,
+    )
+      .bind(uid, accountId, monthParam)
+      .first<{ balance_cents: number }>();
+
+    startingBalance = prevSnap?.balance_cents ?? 0;
+    startingDelta = 0;
+  }
+
+  if (startingBalance <= 0) {
+    bad(`A conta ${invAccount.name} não possui saldo disponível para resgate`, 400);
+  }
+  if (amount > startingBalance) {
+    bad(
+      `O valor a resgatar (${(amount / 100).toFixed(2).replace('.', ',')}) é maior que o saldo disponível na conta (${(startingBalance / 100).toFixed(2).replace('.', ',')})`,
+      400,
+    );
+  }
+
+  const newBalance = startingBalance - amount;
+  const newDelta = startingDelta - amount;
+
+  // 3. Atualiza o snapshot da conta de investimento abatendo o valor
+  await c.env.DB.prepare(
+    `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, account_id, month) DO UPDATE SET
+       balance_cents = excluded.balance_cents,
+       delta_cents = excluded.delta_cents`,
+  )
+    .bind(uid, accountId, monthParam, newBalance, newDelta)
+    .run();
+
+  // 4. Credita o valor resgatado no saldo da conta NUBANK
+  const nubankBal = await c.env.DB.prepare(
+    `SELECT id, initial_cents FROM account_balances
+     WHERE user_id = ? AND account_id = 'nubank' AND month = ?`,
+  )
+    .bind(uid, monthParam)
+    .first<{ id: number; initial_cents: number }>();
+
+  if (nubankBal) {
+    await c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+      .bind(amount, nubankBal.id)
+      .run();
+  } else {
+    const prevNubank = await c.env.DB.prepare(
+      `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY updated_at DESC LIMIT 1`,
+    )
+      .bind(uid)
+      .first<{ initial_cents: number }>();
+
+    const baseNubank = (prevNubank?.initial_cents ?? 0) + amount;
+    await c.env.DB.prepare(
+      `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+       VALUES (?, ?, 'nubank', ?, datetime('now'))`,
+    )
+      .bind(uid, monthParam, baseNubank)
+      .run();
+  }
+
+  // 5. Registra a entrada em inflows para a Nubank
+  await c.env.DB.prepare(
+    `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+     VALUES (?, 'nubank', ?, ?, ?)`,
+  )
+    .bind(uid, amount, `Resgate Investimento - ${invAccount.name}`, dateParam)
+    .run();
+
+  return c.json({
+    ok: true,
+    account_id: accountId,
+    account_name: invAccount.name,
+    redeemed_cents: amount,
+    new_balance_cents: newBalance,
+    month: monthParam,
+  });
 });
 
 app.post('/investments/accounts', async (c) => {
@@ -932,7 +1165,7 @@ app.post('/investments/accounts', async (c) => {
 app.get('/export', async (c) => {
   const uid = c.get('userId');
   const db = c.env.DB;
-  const [incomes, categories, expenses, accounts, snapshots] = await db.batch([
+  const [incomes, categories, expenses, inflows, accounts, snapshots] = await db.batch([
     db.prepare('SELECT name, amount_cents FROM incomes WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
     db.prepare('SELECT name, budget_cents, note FROM categories WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
     db.prepare(
@@ -942,6 +1175,7 @@ app.get('/export', async (c) => {
        FROM expenses e JOIN categories c ON c.id = e.category_id
        WHERE e.user_id = ? ORDER BY e.spent_on, e.id`,
     ).bind(uid),
+    db.prepare('SELECT account_id, amount_cents, description, received_on FROM inflows WHERE user_id = ? ORDER BY received_on, id').bind(uid),
     db.prepare('SELECT id, name FROM investment_accounts WHERE user_id = ? ORDER BY sort_order, id').bind(uid),
     db.prepare(
       'SELECT account_id, month, balance_cents, delta_cents FROM investment_snapshots WHERE user_id = ? ORDER BY month',
@@ -953,6 +1187,7 @@ app.get('/export', async (c) => {
     incomes: incomes.results,
     categories: categories.results,
     expenses: expenses.results,
+    inflows: inflows.results,
     investment_accounts: accounts.results,
     investment_snapshots: snapshots.results,
   });

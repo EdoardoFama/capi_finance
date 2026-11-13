@@ -51,6 +51,12 @@ export const IconDownload = (p: { className?: string }) => (
 export const IconCheck = (p: { className?: string }) => (
   <Svg {...p}><polyline points="20 6 9 17 4 12" /></Svg>
 );
+export const IconArrowDownLeft = (p: { className?: string }) => (
+  <Svg {...p}><line x1="17" y1="7" x2="7" y2="17" /><polyline points="17 17 7 17 7 7" /></Svg>
+);
+export const IconArrowUpRight = (p: { className?: string }) => (
+  <Svg {...p}><line x1="7" y1="17" x2="17" y2="7" /><polyline points="7 7 17 7 17 17" /></Svg>
+);
 export const IconSparkles = (p: { className?: string }) => (
   <Svg {...p}><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" /></Svg>
 );

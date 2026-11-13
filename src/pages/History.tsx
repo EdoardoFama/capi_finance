@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
-import { api, type Category, type Expense, ACCOUNT_DEFINITIONS } from '../api';
+import { Link, useSearchParams } from 'react-router';
+import { api, type Category, type Expense, type Inflow, ACCOUNT_DEFINITIONS } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import {
@@ -21,6 +21,7 @@ import DistributionChart from '../components/DistributionChart';
 export default function History() {
   const { month } = useMonth();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [exportOpen, setExportOpen] = useState(false);
   const [exportScope, setExportScope] = useState<string>('all');
@@ -42,19 +43,43 @@ export default function History() {
   }
 
   const [expenses, setExpenses] = useState<Expense[] | null>(null);
+  const [inflows, setInflows] = useState<Inflow[] | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+
+  // Filtros
+  const initialCategory = searchParams.get('categoria') || 'all';
+  const [selectedCategory, setSelectedCategory] = useState<string>(initialCategory);
   const [selectedAccount, setSelectedAccount] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'inflow'>('all');
   const [search, setSearch] = useState<string>('');
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
+  // Sincroniza se o parâmetro na URL mudar
+  useEffect(() => {
+    const cat = searchParams.get('categoria');
+    if (cat) setSelectedCategory(cat);
+  }, [searchParams]);
+
+  function handleCategorySelect(catId: string) {
+    setSelectedCategory(catId);
+    if (catId === 'all') {
+      searchParams.delete('categoria');
+      setSearchParams(searchParams, { replace: true });
+    } else {
+      searchParams.set('categoria', catId);
+      setSearchParams(searchParams, { replace: true });
+    }
+  }
+
   const load = useCallback(async () => {
     try {
-      const [e, c] = await Promise.all([
+      const [e, inf, c] = await Promise.all([
         api<Expense[]>(`/expenses?month=${month}`),
+        api<Inflow[]>(`/inflows?month=${month}`),
         api<Category[]>('/categories'),
       ]);
       setExpenses(e);
+      setInflows(inf);
       setCategories(c);
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -63,10 +88,11 @@ export default function History() {
 
   useEffect(() => {
     setExpenses(null);
+    setInflows(null);
     load();
   }, [load]);
 
-  async function remove(exp: Expense) {
+  async function removeExpense(exp: Expense) {
     if (exp.installment_total > 1 && exp.installment_group_id) {
       const deleteAll = confirm(
         `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
@@ -93,56 +119,118 @@ export default function History() {
     }
   }
 
-  // Filtragem por busca, conta e categoria
-  const filtered = useMemo(() => {
-    if (!expenses) return [];
+  async function removeInflow(inf: Inflow) {
+    const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+    if (
+      !confirm(
+        `Deseja excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n` +
+          `O saldo da conta ${accInfo?.name ?? 'Conta'} será ajustado (descontando esse valor).`,
+      )
+    )
+      return;
+    try {
+      await api(`/inflows/${inf.id}`, { method: 'DELETE' });
+      toast('Entrada excluída');
+      await load();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  // Itens unificados do Extrato
+  type ExtratoItem =
+    | { kind: 'expense'; data: Expense; date: string; id: string }
+    | { kind: 'inflow'; data: Inflow; date: string; id: string };
+
+  const filteredItems = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return expenses.filter((item) => {
-      const matchesCategory =
-        selectedCategory === 'all' || item.category_id === Number(selectedCategory);
-      const matchesAccount =
-        selectedAccount === 'all' || item.account_id === selectedAccount;
-      const matchesSearch =
-        !q ||
-        (item.title && item.title.toLowerCase().includes(q)) ||
-        (item.description && item.description.toLowerCase().includes(q)) ||
-        item.category_name.toLowerCase().includes(q);
-      return matchesCategory && matchesAccount && matchesSearch;
-    });
-  }, [expenses, selectedCategory, selectedAccount, search]);
+    const result: ExtratoItem[] = [];
 
-  const totalFiltered = useMemo(() => {
-    return filtered.reduce((acc, curr) => acc + curr.amount_cents, 0);
-  }, [filtered]);
+    // Saídas (Expenses)
+    if (typeFilter === 'all' || typeFilter === 'expense') {
+      (expenses ?? []).forEach((item) => {
+        const matchesCategory =
+          selectedCategory === 'all' || item.category_id === Number(selectedCategory);
+        const matchesAccount =
+          selectedAccount === 'all' || item.account_id === selectedAccount;
+        const matchesSearch =
+          !q ||
+          (item.title && item.title.toLowerCase().includes(q)) ||
+          (item.description && item.description.toLowerCase().includes(q)) ||
+          item.category_name.toLowerCase().includes(q);
 
-  // Distribuição dos gastos filtrados por categoria
+        if (matchesCategory && matchesAccount && matchesSearch) {
+          result.push({ kind: 'expense', data: item, date: item.spent_on, id: `exp_${item.id}` });
+        }
+      });
+    }
+
+    // Entradas (Inflows)
+    if (typeFilter === 'all' || typeFilter === 'inflow') {
+      (inflows ?? []).forEach((item) => {
+        // Se houver filtro de categoria selecionado, entradas não possuem categoria de despesa
+        const matchesCategory = selectedCategory === 'all';
+        const matchesAccount =
+          selectedAccount === 'all' || item.account_id === selectedAccount;
+        const matchesSearch =
+          !q || (item.description && item.description.toLowerCase().includes(q));
+
+        if (matchesCategory && matchesAccount && matchesSearch) {
+          result.push({ kind: 'inflow', data: item, date: item.received_on, id: `inf_${item.id}` });
+        }
+      });
+    }
+
+    return result;
+  }, [expenses, inflows, typeFilter, selectedCategory, selectedAccount, search]);
+
+  const totalFilteredExpenses = useMemo(() => {
+    return filteredItems
+      .filter((i): i is ExtratoItem & { kind: 'expense' } => i.kind === 'expense')
+      .reduce((acc, curr) => acc + curr.data.amount_cents, 0);
+  }, [filteredItems]);
+
+  const totalFilteredInflows = useMemo(() => {
+    return filteredItems
+      .filter((i): i is ExtratoItem & { kind: 'inflow' } => i.kind === 'inflow')
+      .reduce((acc, curr) => acc + curr.data.amount_cents, 0);
+  }, [filteredItems]);
+
+  // Distribuição dos gastos filtrados por categoria (apenas saídas)
   const categoryDistribution = useMemo(() => {
     const map = new Map<string, number>();
-    for (const exp of filtered) {
-      const name = exp.category_name || 'Outros';
-      map.set(name, (map.get(name) ?? 0) + exp.amount_cents);
+    for (const item of filteredItems) {
+      if (item.kind === 'expense') {
+        const name = item.data.category_name || 'Outros';
+        map.set(name, (map.get(name) ?? 0) + item.data.amount_cents);
+      }
     }
     return [...map.entries()].map(([name, amount_cents]) => ({
       name,
       amount_cents,
     }));
-  }, [filtered]);
+  }, [filteredItems]);
 
   // Agrupamento por dia (ordenado do mais recente pro mais antigo)
   const grouped = useMemo(() => {
-    const map = new Map<string, Expense[]>();
-    for (const e of filtered) {
-      map.set(e.spent_on, [...(map.get(e.spent_on) ?? []), e]);
+    const map = new Map<string, ExtratoItem[]>();
+    for (const e of filteredItems) {
+      map.set(e.date, [...(map.get(e.date) ?? []), e]);
     }
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-  }, [filtered]);
+  }, [filteredItems]);
+
+  const activeCategoryObj = useMemo(() => {
+    if (selectedCategory === 'all') return null;
+    return categories.find((c) => String(c.id) === selectedCategory) ?? null;
+  }, [selectedCategory, categories]);
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PageTitle
           title="Extrato Completo"
-          subtitle={`Todos os gastos registrados em ${monthLabel(month)}`}
+          subtitle={`Histórico detalhado de saídas e entradas em ${monthLabel(month)}`}
         />
         <div className="flex items-center gap-2">
           <button
@@ -157,7 +245,7 @@ export default function History() {
             to="/lancar"
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-3.5 py-2.5 text-xs sm:text-sm font-extrabold text-black shadow-lg shadow-emerald-500/20 transition hover:brightness-110"
           >
-            <IconPlus className="h-4 w-4 stroke-[2.4]" /> Novo Gasto
+            <IconPlus className="h-4 w-4 stroke-[2.4]" /> Novo Lançamento
           </Link>
         </div>
       </div>
@@ -222,29 +310,92 @@ export default function History() {
 
       <MonthPicker />
 
+      {/* Alerta de Categoria Ativa (quando veio pelo clique na Home) */}
+      {activeCategoryObj && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-blue-500/35 bg-blue-500/10 p-3.5 shadow-lg shadow-blue-500/5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="h-2.5 w-2.5 rounded-full bg-blue-400 ring-2 ring-blue-400/20 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs text-blue-300 font-medium">Filtrando extrato pela categoria:</p>
+              <p className="text-sm font-extrabold text-white truncate">{activeCategoryObj.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleCategorySelect('all')}
+            className="shrink-0 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/40 px-3 py-1.5 text-xs font-bold text-blue-200 transition"
+          >
+            Limpar filtro ✕
+          </button>
+        </div>
+      )}
+
       {/* Gráfico de distribuição dos gastos realizados */}
-      {totalFiltered > 0 && (
+      {totalFilteredExpenses > 0 && selectedCategory === 'all' && (
         <DistributionChart
           title="Distribuição dos Gastos Realizados"
-          subtitle="Para onde foi o seu dinheiro de acordo com os lançamentos listados abaixo"
+          subtitle="Para onde foi o seu dinheiro de acordo com as saídas listadas abaixo"
           items={categoryDistribution}
         />
       )}
 
       {/* Resumo e Filtros */}
-      <Card className="space-y-3.5">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
-          <div>
-            <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
-              Total Filtrado no Extrato
-            </p>
-            <p className="text-2xl font-black tracking-tight text-white tabular-nums">
-              {formatBRL(totalFiltered)}
-            </p>
+      <Card className="space-y-4">
+        {/* Balanço Filtrado: Saídas, Entradas e Saldo */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3.5">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
+                Saídas Filtradas
+              </p>
+              <p className="text-xl sm:text-2xl font-black tracking-tight text-white tabular-nums">
+                {formatBRL(totalFilteredExpenses)}
+              </p>
+            </div>
+            {totalFilteredInflows > 0 && (
+              <>
+                <div className="h-8 w-px bg-white/[0.08] hidden sm:block" />
+                <div>
+                  <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                    Entradas
+                  </p>
+                  <p className="text-xl sm:text-2xl font-black tracking-tight text-emerald-400 tabular-nums">
+                    +{formatBRL(totalFilteredInflows)}
+                  </p>
+                </div>
+              </>
+            )}
           </div>
-          <span className="rounded-full border border-white/[0.08] bg-zinc-900 px-3 py-1 text-xs font-bold text-zinc-300">
-            {filtered.length} {filtered.length === 1 ? 'lançamento' : 'lançamentos'}
-          </span>
+
+          {/* Abas de Tipo: Todos / Saídas / Entradas */}
+          <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setTypeFilter('all')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                typeFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Todos ({filteredItems.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setTypeFilter('expense')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                typeFilter === 'expense' ? 'bg-rose-500/20 text-rose-300' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Saídas
+            </button>
+            <button
+              type="button"
+              onClick={() => setTypeFilter('inflow')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                typeFilter === 'inflow' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Entradas
+            </button>
+          </div>
         </div>
 
         {/* Filtro Rápido por Conta */}
@@ -277,13 +428,14 @@ export default function History() {
           ))}
         </div>
 
+        {/* Busca e Dropdown de Categorias */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           {/* Busca por texto */}
           <div className="relative">
             <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
             <input
               type="text"
-              placeholder="Buscar por título, descrição ou categoria..."
+              placeholder="Buscar lançamento por nome, loja ou detalhe..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-500/60"
@@ -301,7 +453,7 @@ export default function History() {
           {/* Filtro por Categoria */}
           <select
             value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
+            onChange={(e) => handleCategorySelect(e.target.value)}
             className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
           >
             <option value="all">Todas as categorias</option>
@@ -315,17 +467,18 @@ export default function History() {
       </Card>
 
       {/* Lista do Extrato */}
-      {!expenses ? (
+      {!expenses || !inflows ? (
         <Spinner />
-      ) : filtered.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <Card className="text-center py-12 text-zinc-500">
           <p className="text-sm font-medium">Nenhum lançamento encontrado para os filtros selecionados.</p>
-          {(search || selectedCategory !== 'all' || selectedAccount !== 'all') && (
+          {(search || selectedCategory !== 'all' || selectedAccount !== 'all' || typeFilter !== 'all') && (
             <button
               onClick={() => {
                 setSearch('');
-                setSelectedCategory('all');
+                handleCategorySelect('all');
                 setSelectedAccount('all');
+                setTypeFilter('all');
               }}
               className="mt-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 transition"
             >
@@ -339,77 +492,122 @@ export default function History() {
             <div key={day}>
               <div className="mb-1.5 flex justify-between px-1 text-xs font-semibold text-zinc-400">
                 <span className="capitalize">{dayLabel(day)}</span>
-                <span className="tabular-nums text-zinc-300">
-                  {formatBRL(items.reduce((s, x) => s + x.amount_cents, 0))}
+                <span className="tabular-nums text-zinc-400">
+                  {items.length} {items.length === 1 ? 'registro' : 'registros'}
                 </span>
               </div>
               <Card className="divide-y divide-white/[0.06] !p-0 overflow-hidden">
-                {items.map((exp) => (
-                  <div
-                    key={exp.id}
-                    className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-sm text-zinc-100">
-                          {exp.title || exp.category_name}
-                        </p>
-                        <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-emerald-400 border border-white/[0.07]">
-                          {exp.category_name}
+                {items.map((item) => {
+                  if (item.kind === 'inflow') {
+                    const inf = item.data;
+                    const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition bg-emerald-500/[0.02]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-sm text-zinc-100">
+                              {inf.description || 'Entrada em conta'}
+                            </p>
+                            <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10px] font-extrabold text-emerald-300 border border-emerald-500/30">
+                              Entrada
+                            </span>
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
+                                accInfo?.badgeClass ?? 'bg-zinc-800 text-zinc-300'
+                              }`}
+                            >
+                              {accInfo?.tag ?? inf.account_id}
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-500 mt-0.5">Crédito em conta</p>
+                        </div>
+                        <span className="font-extrabold text-sm sm:text-base tabular-nums text-emerald-400">
+                          +{formatBRL(inf.amount_cents)}
                         </span>
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
-                            exp.account_id === 'nubank'
-                              ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
-                              : exp.account_id === 'pluxe_alimentacao'
-                              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
-                              : exp.account_id === 'pluxe_refeicao'
-                              ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
-                              : 'bg-orange-500/10 text-orange-300 border-orange-500/20'
-                          }`}
+                        <button
+                          onClick={() => removeInflow(inf)}
+                          className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
+                          title="Excluir entrada"
+                          aria-label="Excluir entrada"
                         >
-                          {exp.account_id === 'nubank'
-                            ? `Nubank • ${
-                                exp.payment_method === 'credit'
-                                  ? exp.installment_total > 1
-                                    ? `Crédito (${exp.installment_current}/${exp.installment_total})`
-                                    : 'Crédito'
-                                  : exp.payment_method === 'pix'
-                                  ? 'Pix'
-                                  : 'Débito'
-                              }`
-                            : exp.account_id === 'pluxe_alimentacao'
-                            ? 'Pluxe Alim.'
-                            : exp.account_id === 'pluxe_refeicao'
-                            ? 'Pluxe Ref.'
-                            : 'Alelo'}
-                        </span>
+                          <IconTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                      {exp.description && (
-                        <p className="truncate text-xs text-zinc-400 mt-0.5">{exp.description}</p>
-                      )}
+                    );
+                  }
+
+                  // Saída (Expense)
+                  const exp = item.data;
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-sm text-zinc-100">
+                            {exp.title || exp.category_name}
+                          </p>
+                          <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-emerald-400 border border-white/[0.07]">
+                            {exp.category_name}
+                          </span>
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
+                              exp.account_id === 'nubank'
+                                ? 'bg-purple-500/10 text-purple-300 border-purple-500/20'
+                                : exp.account_id === 'pluxe_alimentacao'
+                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                                : exp.account_id === 'pluxe_refeicao'
+                                ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+                                : 'bg-orange-500/10 text-orange-300 border-orange-500/20'
+                            }`}
+                          >
+                            {exp.account_id === 'nubank'
+                              ? `Nubank • ${
+                                  exp.payment_method === 'credit'
+                                    ? exp.installment_total > 1
+                                      ? `Crédito (${exp.installment_current}/${exp.installment_total})`
+                                      : 'Crédito'
+                                    : exp.payment_method === 'pix'
+                                    ? 'Pix'
+                                    : 'Débito'
+                                }`
+                              : exp.account_id === 'pluxe_alimentacao'
+                              ? 'Pluxe Alim.'
+                              : exp.account_id === 'pluxe_refeicao'
+                              ? 'Pluxe Ref.'
+                              : 'Alelo'}
+                          </span>
+                        </div>
+                        {exp.description && (
+                          <p className="truncate text-xs text-zinc-400 mt-0.5 font-normal">{exp.description}</p>
+                        )}
+                      </div>
+                      <span className="font-extrabold text-sm sm:text-base tabular-nums text-white">
+                        {formatBRL(exp.amount_cents)}
+                      </span>
+                      <button
+                        onClick={() => setEditingExpense(exp)}
+                        className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                        title="Editar lançamento"
+                        aria-label="Editar"
+                      >
+                        <IconEdit className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => removeExpense(exp)}
+                        className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
+                        title="Excluir gasto"
+                        aria-label="Excluir"
+                      >
+                        <IconTrash className="h-4 w-4" />
+                      </button>
                     </div>
-                    <span className="font-extrabold text-sm sm:text-base tabular-nums text-white">
-                      {formatBRL(exp.amount_cents)}
-                    </span>
-                    <button
-                      onClick={() => setEditingExpense(exp)}
-                      className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
-                      title="Editar lançamento"
-                      aria-label="Editar"
-                    >
-                      <IconEdit className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => remove(exp)}
-                      className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
-                      title="Excluir gasto"
-                      aria-label="Excluir"
-                    >
-                      <IconTrash className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </Card>
             </div>
           ))}

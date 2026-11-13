@@ -436,7 +436,7 @@ export default function Home() {
                   </span>
                 </div>
                 <p className="text-xs text-zinc-500 mt-0.5">
-                  Despesas planejadas com meta ou teto mensal. Clique em uma categoria para lançar.
+                  Despesas planejadas com meta ou teto mensal. Clique na categoria para ver o extrato filtrado.
                 </p>
               </div>
 
@@ -491,7 +491,7 @@ export default function Home() {
                   const pct = percent(c.spent_cents, c.budget_cents);
                   const left = c.budget_cents - c.spent_cents;
                   return (
-                    <Link key={c.id} to={`/lancar?categoria=${c.id}`} className="group block">
+                    <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
                       <Card className="h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99]">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
@@ -504,6 +504,14 @@ export default function Home() {
                                   {c.count}x
                                 </span>
                               )}
+                              <Link
+                                to={`/lancar?categoria=${c.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
+                                title={`Lançar gasto em ${c.name}`}
+                              >
+                                <IconPlus className="h-3.5 w-3.5" />
+                              </Link>
                             </div>
                             {c.note && (
                               <p className="truncate text-[11px] text-zinc-500 mt-0.5" title={c.note}>
@@ -559,7 +567,7 @@ export default function Home() {
                   </span>
                 </div>
                 <p className="text-xs text-zinc-500 mt-0.5">
-                  Despesas flexíveis que consomem o saldo livre (Ganhos − Teto Fixo)
+                  Despesas flexíveis que consomem o saldo livre. Clique para ver o extrato filtrado.
                 </p>
               </div>
             </div>
@@ -650,13 +658,23 @@ export default function Home() {
                       ? Math.round((c.spent_cents / data.por_fora_budget_cents) * 100)
                       : 0;
                   return (
-                    <Link key={c.id} to={`/lancar?categoria=${c.id}`} className="group block">
+                    <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
                       <Card className="h-full transition-all duration-200 hover:border-purple-500/40 hover:bg-zinc-900/50 active:scale-[0.99]">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
-                              {c.name}
-                            </p>
+                            <div className="flex items-center gap-2">
+                              <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
+                                {c.name}
+                              </p>
+                              <Link
+                                to={`/lancar?categoria=${c.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-purple-400 transition"
+                                title={`Lançar gasto em ${c.name}`}
+                              >
+                                <IconPlus className="h-3.5 w-3.5" />
+                              </Link>
+                            </div>
                             <p className="text-[11px] text-zinc-500">
                               {c.count} {c.count === 1 ? 'lançamento' : 'lançamentos'}
                             </p>
