@@ -214,47 +214,52 @@ export default function Home() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccColor, setNewAccColor] = useState('#10b981');
   const [newAccBalance, setNewAccBalance] = useState('');
+  const [isCreatingAcc, setIsCreatingAcc] = useState(false);
 
   const [isEditUserAccountOpen, setIsEditUserAccountOpen] = useState(false);
   const [editingUserAccount, setEditingUserAccount] = useState<AccountBalance | null>(null);
   const [editAccName, setEditAccName] = useState('');
   const [editAccColor, setEditAccColor] = useState('#10b981');
+  const [isSavingEditAcc, setIsSavingEditAcc] = useState(false);
 
   async function handleCreateUserAccount(e: FormEvent) {
     e.preventDefault();
+    if (isCreatingAcc) return;
     const name = newAccName.trim().toUpperCase();
     if (!name) return toast('Informe o nome da conta', 'error');
 
+    setIsCreatingAcc(true);
     try {
-      const created = await api<{ id: number; slug: string; name: string; color: string }>('/accounts', {
+      const initCents = parseBRL(newAccBalance);
+      await api<{ id: number; slug: string; name: string; color: string }>('/accounts', {
         method: 'POST',
-        body: { name, color: newAccColor },
+        body: {
+          name,
+          color: newAccColor,
+          initial_cents: initCents && initCents > 0 ? initCents : undefined,
+          month,
+        },
       });
 
-      const initCents = parseBRL(newAccBalance);
-      if (initCents !== null && initCents > 0) {
-        await api('/accounts/balance', {
-          method: 'PUT',
-          body: { month, account_id: created.slug, initial_cents: initCents },
-        });
-      }
-
-      toast(`Conta ${name} adicionada!`);
+      toast(`Conta ${name} adicionada com sucesso!`);
       setIsAddUserAccountOpen(false);
       setNewAccName('');
       setNewAccBalance('');
       loadDashboard();
     } catch (err) {
       toast((err as Error).message, 'error');
+    } finally {
+      setIsCreatingAcc(false);
     }
   }
 
   async function handleSaveEditUserAccount(e: FormEvent) {
     e.preventDefault();
-    if (!editingUserAccount) return;
+    if (!editingUserAccount || isSavingEditAcc) return;
     const name = editAccName.trim().toUpperCase();
     if (!name) return toast('Informe o nome da conta', 'error');
 
+    setIsSavingEditAcc(true);
     try {
       if (editingUserAccount.id) {
         await api(`/accounts/${editingUserAccount.id}`, {
@@ -268,6 +273,8 @@ export default function Home() {
       loadDashboard();
     } catch (err) {
       toast((err as Error).message, 'error');
+    } finally {
+      setIsSavingEditAcc(false);
     }
   }
 
@@ -903,8 +910,11 @@ export default function Home() {
                 >
                   Cancelar
                 </button>
-                <button className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300">
-                  Criar Conta
+                <button
+                  disabled={isCreatingAcc}
+                  className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-50"
+                >
+                  {isCreatingAcc ? 'Criando…' : 'Criar Conta'}
                 </button>
               </div>
             </form>
@@ -963,8 +973,11 @@ export default function Home() {
                 >
                   Cancelar
                 </button>
-                <button className="flex-1 rounded-xl bg-emerald-400 py-2 text-xs font-extrabold text-black hover:bg-emerald-300">
-                  Salvar
+                <button
+                  disabled={isSavingEditAcc}
+                  className="flex-1 rounded-xl bg-emerald-400 py-2 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-50"
+                >
+                  {isSavingEditAcc ? 'Salvando…' : 'Salvar'}
                 </button>
               </div>
             </form>

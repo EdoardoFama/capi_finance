@@ -979,9 +979,45 @@ app.post('/accounts', async (c) => {
      RETURNING id, slug, name, color, sort_order`,
   )
     .bind(uid, slug, name, color, uid)
-    .first();
+    .first<{ id: number; slug: string; name: string; color: string; sort_order: number }>();
+
+  if (!row) bad('Erro ao criar conta');
+
+  // Se passou initial_cents e month, já define o saldo inicial diretamente
+  if (typeof data.initial_cents === 'number' && data.initial_cents > 0 && typeof data.month === 'string') {
+    await c.env.DB.prepare(
+      `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id, month, account_id)
+       DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
+    )
+      .bind(uid, data.month, row.slug, data.initial_cents)
+      .run();
+  }
 
   return c.json(row, 201);
+});
+
+// ---------- saldos das contas (abertos para edição) ----------
+// IMPORTANTE: Definido ANTES de /accounts/:id para evitar que "balance" seja interpretado como id!
+app.put('/accounts/balance', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const month = str(data.month, 'mês')!;
+  if (!/^\d{4}-\d{2}$/.test(month)) bad('Mês inválido');
+  const accountId = str(data.account_id, 'conta')!;
+  const initialCents = cents(data.initial_cents, 'saldo em conta')!;
+
+  await c.env.DB.prepare(
+    `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(user_id, month, account_id)
+     DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
+  )
+    .bind(uid, month, accountId, initialCents)
+    .run();
+
+  return c.json({ ok: true, account_id: accountId, month, initial_cents: initialCents });
 });
 
 app.put('/accounts/:id', async (c) => {
@@ -1024,27 +1060,6 @@ app.delete('/accounts/:id', async (c) => {
     .run();
 
   return c.json({ ok: true });
-});
-
-// ---------- saldos das contas (abertos para edição) ----------
-app.put('/accounts/balance', async (c) => {
-  const uid = c.get('userId');
-  const data = await body(c);
-  const month = str(data.month, 'mês')!;
-  if (!/^\d{4}-\d{2}$/.test(month)) bad('Mês inválido');
-  const accountId = str(data.account_id, 'conta')!;
-  const initialCents = cents(data.initial_cents, 'saldo em conta')!;
-
-  await c.env.DB.prepare(
-    `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
-     VALUES (?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(user_id, month, account_id)
-     DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
-  )
-    .bind(uid, month, accountId, initialCents)
-    .run();
-
-  return c.json({ ok: true, account_id: accountId, month, initial_cents: initialCents });
 });
 
 // ---------- investimentos ----------
