@@ -556,15 +556,8 @@ app.delete('/categories/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-// ---------- lançamentos (expenses) ----------
-const VALID_ACCOUNTS = ['nubank', 'pluxe_alimentacao', 'pluxe_refeicao', 'alelo'] as const;
-type AccountId = (typeof VALID_ACCOUNTS)[number];
-const ACCOUNT_NAMES: Record<AccountId, string> = {
-  nubank: 'NUBANK',
-  pluxe_alimentacao: 'PLUXE - ALIMENTAÇÃO',
-  pluxe_refeicao: 'PLUXE - REFEIÇÃO',
-  alelo: 'ALELO',
-};
+// ---------- lançamentos (expenses) e contas ----------
+type AccountId = string;
 
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
   e.title, e.description, e.spent_on, e.payment_method, COALESCE(e.account_id, 'nubank') AS account_id,
@@ -614,20 +607,19 @@ app.post('/expenses', async (c) => {
   await assertCategory(c, categoryId, uid);
 
   // Conta de pagamento e forma
-  const rawAccount = typeof data.account_id === 'string' ? data.account_id : 'nubank';
-  const accountId: AccountId = (VALID_ACCOUNTS as readonly string[]).includes(rawAccount)
-    ? (rawAccount as AccountId)
-    : 'nubank';
+  let accountId = typeof data.account_id === 'string' && data.account_id.trim() ? data.account_id.trim() : '';
+  if (!accountId) {
+    const firstAcc = await c.env.DB.prepare('SELECT slug FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1')
+      .bind(uid)
+      .first<{ slug: string }>();
+    accountId = firstAcc?.slug ?? 'padrao';
+  }
 
-  const rawMethod = typeof data.payment_method === 'string'
-    ? data.payment_method
-    : (accountId === 'nubank' ? 'debit' : 'voucher');
-  const paymentMethod = ['debit', 'pix', 'credit', 'voucher'].includes(rawMethod)
-    ? rawMethod
-    : (accountId === 'nubank' ? 'debit' : 'voucher');
+  const rawMethod = typeof data.payment_method === 'string' ? data.payment_method : 'debit';
+  const paymentMethod = ['debit', 'pix', 'credit', 'voucher'].includes(rawMethod) ? rawMethod : 'debit';
 
-  // Parcelamento (apenas permitido quando credit e na conta nubank)
-  const installments = accountId === 'nubank' && paymentMethod === 'credit' && typeof data.installments === 'number' && Number.isInteger(data.installments) && data.installments > 1
+  // Parcelamento (apenas permitido quando credit)
+  const installments = paymentMethod === 'credit' && typeof data.installments === 'number' && Number.isInteger(data.installments) && data.installments > 1
     ? Math.min(data.installments, 48)
     : 1;
 
@@ -682,8 +674,8 @@ app.put('/expenses/:id', async (c) => {
   if (spentOn !== undefined && !isDate(spentOn)) bad('Data inválida');
   if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
 
-  const rawAccount = typeof data.account_id === 'string' && (VALID_ACCOUNTS as readonly string[]).includes(data.account_id)
-    ? data.account_id
+  const rawAccount = typeof data.account_id === 'string' && data.account_id.trim()
+    ? data.account_id.trim()
     : null;
   const rawMethod = typeof data.payment_method === 'string' && ['debit', 'pix', 'credit', 'voucher'].includes(data.payment_method)
     ? data.payment_method
@@ -762,10 +754,13 @@ app.post('/inflows', async (c) => {
   const receivedOn = str(data.received_on, 'data')!;
   if (!isDate(receivedOn)) bad('Data inválida');
 
-  const rawAccount = typeof data.account_id === 'string' ? data.account_id : 'nubank';
-  const accountId: AccountId = (VALID_ACCOUNTS as readonly string[]).includes(rawAccount)
-    ? (rawAccount as AccountId)
-    : 'nubank';
+  let accountId = typeof data.account_id === 'string' && data.account_id.trim() ? data.account_id.trim() : '';
+  if (!accountId) {
+    const firstAcc = await c.env.DB.prepare('SELECT slug FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1')
+      .bind(uid)
+      .first<{ slug: string }>();
+    accountId = firstAcc?.slug ?? 'padrao';
+  }
 
   const month = receivedOn.slice(0, 7);
 
@@ -875,38 +870,41 @@ app.get('/dashboard', async (c) => {
     }
   }
 
-  // 2. Gastos que foram criados APENAS APÓS a data/hora em que o saldo daquela conta foi definido
-  // (gastos passados já existentes na conta não são abatidos)
-  const spentMap: Record<string, number> = {};
-  for (const accId of VALID_ACCOUNTS) {
-    const b = balancesMap[accId];
+  // 2. Busca contas configuradas pelo usuário
+  const userAccRows = await c.env.DB.prepare(
+    'SELECT id, slug, name, color FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id',
+  )
+    .bind(uid)
+    .all<{ id: number; slug: string; name: string; color: string }>();
+
+  // Gastos que foram criados APENAS APÓS a data/hora em que o saldo daquela conta foi definido
+  const accounts = [];
+  for (const uAcc of userAccRows.results) {
+    const b = balancesMap[uAcc.slug];
+    let spent_cents = 0;
     if (b && b.initial_cents > 0 && b.updated_at) {
       const row = await c.env.DB.prepare(
         `SELECT COALESCE(SUM(amount_cents), 0) AS total
          FROM expenses
          WHERE user_id = ?
-           AND COALESCE(account_id, 'nubank') = ?
+           AND account_id = ?
            AND created_at >= ?`,
       )
-        .bind(uid, accId, b.updated_at)
+        .bind(uid, uAcc.slug, b.updated_at)
         .first<{ total: number }>();
-      spentMap[accId] = row?.total ?? 0;
-    } else {
-      spentMap[accId] = 0;
+      spent_cents = row?.total ?? 0;
     }
-  }
-
-  const accounts = VALID_ACCOUNTS.map((accId) => {
-    const initial_cents = balancesMap[accId]?.initial_cents ?? 0;
-    const spent_cents = spentMap[accId] ?? 0;
-    return {
-      account_id: accId,
-      name: ACCOUNT_NAMES[accId],
+    const initial_cents = b?.initial_cents ?? 0;
+    accounts.push({
+      id: uAcc.id,
+      account_id: uAcc.slug,
+      name: uAcc.name,
+      color: uAcc.color,
       initial_cents,
       spent_cents,
       current_cents: initial_cents - spent_cents,
-    };
-  });
+    });
+  }
 
   const totalIncomeCents = Number(inc.results[0]?.total ?? 0);
   const fixedCats = categories.filter((c) => c.is_fixed === 1);
@@ -936,6 +934,98 @@ app.get('/dashboard', async (c) => {
   });
 });
 
+// ---------- gerenciamento de contas do usuário ----------
+app.get('/accounts', async (c) => {
+  const uid = c.get('userId');
+  const accounts = await c.env.DB.prepare(
+    'SELECT id, slug, name, color, sort_order FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id',
+  )
+    .bind(uid)
+    .all();
+  return c.json(accounts.results);
+});
+
+app.post('/accounts', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const name = str(data.name, 'nome')!.toUpperCase();
+  const color = str(data.color ?? '#10b981', 'cor', { required: false, max: 20 }) ?? '#10b981';
+
+  let baseSlug = name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  if (!baseSlug) baseSlug = 'conta';
+
+  let slug = baseSlug;
+  let counter = 1;
+  while (true) {
+    const existing = await c.env.DB.prepare(
+      'SELECT id FROM user_accounts WHERE user_id = ? AND slug = ?',
+    )
+      .bind(uid, slug)
+      .first();
+    if (!existing) break;
+    counter++;
+    slug = `${baseSlug}_${counter}`;
+  }
+
+  const row = await c.env.DB.prepare(
+    `INSERT INTO user_accounts (user_id, slug, name, color, sort_order)
+     VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM user_accounts WHERE user_id = ?))
+     RETURNING id, slug, name, color, sort_order`,
+  )
+    .bind(uid, slug, name, color, uid)
+    .first();
+
+  return c.json(row, 201);
+});
+
+app.put('/accounts/:id', async (c) => {
+  const uid = c.get('userId');
+  const id = idParam(c.req.param('id'));
+  const data = await body(c);
+  const name = str(data.name, 'nome', { required: false })?.toUpperCase();
+  const color = str(data.color, 'cor', { required: false, max: 20 });
+
+  const row = await c.env.DB.prepare(
+    `UPDATE user_accounts SET name = COALESCE(?, name), color = COALESCE(?, color)
+     WHERE id = ? AND user_id = ?
+     RETURNING id, slug, name, color, sort_order`,
+  )
+    .bind(name ?? null, color ?? null, id, uid)
+    .first();
+
+  if (!row) bad('Conta não encontrada', 404);
+  return c.json(row);
+});
+
+app.delete('/accounts/:id', async (c) => {
+  const uid = c.get('userId');
+  const id = idParam(c.req.param('id'));
+
+  const acc = await c.env.DB.prepare('SELECT id, slug FROM user_accounts WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .first<{ id: number; slug: string }>();
+
+  if (!acc) bad('Conta não encontrada', 404);
+
+  // Remove saldos da conta
+  await c.env.DB.prepare('DELETE FROM account_balances WHERE user_id = ? AND account_id = ?')
+    .bind(uid, acc.slug)
+    .run();
+
+  // Remove a conta
+  await c.env.DB.prepare('DELETE FROM user_accounts WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .run();
+
+  return c.json({ ok: true });
+});
+
 // ---------- saldos das contas (abertos para edição) ----------
 app.put('/accounts/balance', async (c) => {
   const uid = c.get('userId');
@@ -943,7 +1033,6 @@ app.put('/accounts/balance', async (c) => {
   const month = str(data.month, 'mês')!;
   if (!/^\d{4}-\d{2}$/.test(month)) bad('Mês inválido');
   const accountId = str(data.account_id, 'conta')!;
-  if (!(VALID_ACCOUNTS as readonly string[]).includes(accountId)) bad('Conta inválida');
   const initialCents = cents(data.initial_cents, 'saldo em conta')!;
 
   await c.env.DB.prepare(
@@ -1094,48 +1183,71 @@ app.post('/investments/redeem', async (c) => {
     .bind(uid, accountId, monthParam, newBalance, newDelta)
     .run();
 
-  // 4. Credita o valor resgatado no saldo da conta NUBANK
-  const nubankBal = await c.env.DB.prepare(
-    `SELECT id, initial_cents FROM account_balances
-     WHERE user_id = ? AND account_id = 'nubank' AND month = ?`,
+  // 4. Determina a conta de destino para crédito do resgate
+  let destAccountId = typeof data.destination_account_id === 'string' && data.destination_account_id.trim()
+    ? data.destination_account_id.trim()
+    : 'nubank';
+
+  const destAcc = await c.env.DB.prepare(
+    'SELECT slug, name FROM user_accounts WHERE user_id = ? AND slug = ?',
   )
-    .bind(uid, monthParam)
+    .bind(uid, destAccountId)
+    .first<{ slug: string; name: string }>();
+
+  if (!destAcc) {
+    const fallbackAcc = await c.env.DB.prepare(
+      'SELECT slug, name FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1',
+    )
+      .bind(uid)
+      .first<{ slug: string; name: string }>();
+    if (fallbackAcc) {
+      destAccountId = fallbackAcc.slug;
+    }
+  }
+
+  // Credita o valor resgatado no saldo da conta de destino
+  const destBal = await c.env.DB.prepare(
+    `SELECT id, initial_cents FROM account_balances
+     WHERE user_id = ? AND account_id = ? AND month = ?`,
+  )
+    .bind(uid, destAccountId, monthParam)
     .first<{ id: number; initial_cents: number }>();
 
-  if (nubankBal) {
+  if (destBal) {
     await c.env.DB.prepare(
       `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ?`,
     )
-      .bind(amount, nubankBal.id)
+      .bind(amount, destBal.id)
       .run();
   } else {
-    const prevNubank = await c.env.DB.prepare(
-      `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY updated_at DESC LIMIT 1`,
+    const prevDest = await c.env.DB.prepare(
+      `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? ORDER BY updated_at DESC LIMIT 1`,
     )
-      .bind(uid)
+      .bind(uid, destAccountId)
       .first<{ initial_cents: number }>();
 
-    const baseNubank = (prevNubank?.initial_cents ?? 0) + amount;
+    const baseBal = (prevDest?.initial_cents ?? 0) + amount;
     await c.env.DB.prepare(
       `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
-       VALUES (?, ?, 'nubank', ?, datetime('now'))`,
+       VALUES (?, ?, ?, ?, datetime('now'))`,
     )
-      .bind(uid, monthParam, baseNubank)
+      .bind(uid, monthParam, destAccountId, baseBal)
       .run();
   }
 
-  // 5. Registra a entrada em inflows para a Nubank
+  // 5. Registra a entrada em inflows para a conta de destino
   await c.env.DB.prepare(
     `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
-     VALUES (?, 'nubank', ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?)`,
   )
-    .bind(uid, amount, `Resgate Investimento - ${invAccount.name}`, dateParam)
+    .bind(uid, destAccountId, amount, `Resgate Investimento - ${invAccount.name}`, dateParam)
     .run();
 
   return c.json({
     ok: true,
     account_id: accountId,
     account_name: invAccount.name,
+    destination_account: destAccountId,
     redeemed_cents: amount,
     new_balance_cents: newBalance,
     month: monthParam,
@@ -1159,6 +1271,48 @@ app.post('/investments/accounts', async (c) => {
   );
 
   return c.json(row, 201);
+});
+
+app.put('/investments/accounts/:id', async (c) => {
+  const uid = c.get('userId');
+  const id = idParam(c.req.param('id'));
+  const data = await body(c);
+  const name = str(data.name, 'nome', { required: false })?.toUpperCase();
+  const color = str(data.color, 'cor', { required: false, max: 20 });
+
+  const row = await c.env.DB.prepare(
+    `UPDATE investment_accounts SET name = COALESCE(?, name), color = COALESCE(?, color)
+     WHERE id = ? AND user_id = ?
+     RETURNING id, name, color, sort_order`,
+  )
+    .bind(name ?? null, color ?? null, id, uid)
+    .first();
+
+  if (!row) bad('Corretora não encontrada', 404);
+  return c.json(row);
+});
+
+app.delete('/investments/accounts/:id', async (c) => {
+  const uid = c.get('userId');
+  const id = idParam(c.req.param('id'));
+
+  const acc = await c.env.DB.prepare('SELECT id FROM investment_accounts WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .first();
+
+  if (!acc) bad('Corretora não encontrada', 404);
+
+  // Remove snapshots dessa corretora
+  await c.env.DB.prepare('DELETE FROM investment_snapshots WHERE account_id = ? AND user_id = ?')
+    .bind(id, uid)
+    .run();
+
+  // Remove a corretora
+  await c.env.DB.prepare('DELETE FROM investment_accounts WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .run();
+
+  return c.json({ ok: true });
 });
 
 // ---------- export (todos os dados do usuário) ----------

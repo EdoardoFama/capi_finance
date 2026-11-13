@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, type InvestmentSnapshot, type InvestmentsData, type RedeemResult } from '../api';
+import { api, type InvestmentAccount, type InvestmentSnapshot, type InvestmentsData, type RedeemResult, type UserAccount } from '../api';
 import { useToast } from '../context';
 import { centsToInput, formatBRL, parseBRL, shiftMonth, todayISO } from '../format';
-import { Card, IconArrowDownLeft, IconEdit, IconPlus, PageTitle, Spinner } from '../components/ui';
+import { Card, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 const MONTH_NAMES = [
@@ -19,32 +19,42 @@ function formatMonthHeader(ym: string) {
 export default function Investments() {
   const toast = useToast();
   const [data, setData] = useState<InvestmentsData | null>(null);
+  const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Modal de Atualização de Saldos do Mês
+  // Modal de Atualização de Saldos do Mês (Cálculo Automático)
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [targetMonth, setTargetMonth] = useState('');
   const [formBalances, setFormBalances] = useState<Record<number, string>>({});
-  const [formDeltas, setFormDeltas] = useState<Record<number, string>>({});
-  const [manualDeltaEnabled, setManualDeltaEnabled] = useState<Record<number, boolean>>({});
   const [saving, setSaving] = useState(false);
 
-  // Modal de Adição de Conta
+  // Modal de Adição de Corretora
   const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
   const [newAccountColor, setNewAccountColor] = useState('#10b981');
 
-  // Modal de Resgate de Investimento para Nubank
+  // Modal de Edição de Corretora
+  const [isEditAccountOpen, setIsEditAccountOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<InvestmentAccount | null>(null);
+  const [editAccountName, setEditAccountName] = useState('');
+  const [editAccountColor, setEditAccountColor] = useState('#10b981');
+
+  // Modal de Saque / Resgate de Investimento
   const [isRedeemOpen, setIsRedeemOpen] = useState(false);
   const [redeemAccountId, setRedeemAccountId] = useState<number | null>(null);
+  const [redeemDestAccount, setRedeemDestAccount] = useState<string>('');
   const [redeemAmount, setRedeemAmount] = useState('');
   const [redeemDate, setRedeemDate] = useState(todayISO());
   const [redeeming, setRedeeming] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const res = await api<InvestmentsData>('/investments');
-      setData(res);
+      const [invRes, accsRes] = await Promise.all([
+        api<InvestmentsData>('/investments'),
+        api<UserAccount[]>('/accounts').catch(() => []),
+      ]);
+      setData(invRes);
+      setUserAccounts(accsRes);
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
@@ -145,8 +155,6 @@ export default function Investments() {
   function openMonthEditor(monthStr: string) {
     setTargetMonth(monthStr);
     const balances: Record<number, string> = {};
-    const deltas: Record<number, string> = {};
-    const manualEnabled: Record<number, boolean> = {};
 
     data?.accounts.forEach((acc) => {
       const snap = snapshotMap.get(`${acc.id}_${monthStr}`);
@@ -154,21 +162,13 @@ export default function Investments() {
 
       if (snap) {
         balances[acc.id] = centsToInput(snap.balance_cents);
-        deltas[acc.id] = centsToInput(snap.delta_cents);
-        // Habilita manual apenas se o delta cadastrado for diferente da variação automática simples
-        const autoDiff = snap.balance_cents - prevBal;
-        manualEnabled[acc.id] = snap.delta_cents !== autoDiff;
       } else {
-        // Pré-preenche com saldo anterior para agilizar a definição do novo mês
+        // Pré-preenche com o saldo anterior para não zerar acidentalmente contas não editadas
         balances[acc.id] = prevBal > 0 ? centsToInput(prevBal) : '';
-        deltas[acc.id] = '';
-        manualEnabled[acc.id] = false;
       }
     });
 
     setFormBalances(balances);
-    setFormDeltas(deltas);
-    setManualDeltaEnabled(manualEnabled);
     setIsUpdateModalOpen(true);
   }
 
@@ -178,20 +178,11 @@ export default function Investments() {
     setSaving(true);
     try {
       for (const acc of data.accounts) {
-        const rawBal = formBalances[acc.id] || '0';
-        const balCents = parseBRL(rawBal) ?? 0;
+        const rawBal = formBalances[acc.id] || '';
         const prevBal = getPreviousBalance(acc.id, targetMonth);
-
-        let deltaCents: number;
-        if (manualDeltaEnabled[acc.id] && formDeltas[acc.id]?.trim()) {
-          const cleanDelta = formDeltas[acc.id].trim();
-          const isNegative = cleanDelta.startsWith('-');
-          const parsedAbs = parseBRL(cleanDelta.replace('-', ''));
-          deltaCents = parsedAbs !== null ? (isNegative ? -parsedAbs : parsedAbs) : balCents - prevBal;
-        } else {
-          // Auto-calcula variação: Saldo atual - Saldo do mês anterior
-          deltaCents = balCents - prevBal;
-        }
+        const balCents = rawBal.trim() ? (parseBRL(rawBal) ?? 0) : prevBal;
+        // O próprio sistema calcula a variação com base no saldo anterior
+        const autoDelta = balCents - prevBal;
 
         await api('/investments/snapshot', {
           method: 'POST',
@@ -199,7 +190,7 @@ export default function Investments() {
             account_id: acc.id,
             month: targetMonth,
             balance_cents: balCents,
-            delta_cents: deltaCents,
+            delta_cents: autoDelta,
           },
         });
       }
@@ -223,6 +214,14 @@ export default function Investments() {
     setRedeemAccountId(initialAccId);
     setRedeemAmount('');
     setRedeemDate(todayISO());
+
+    // Conta de destino padrão: 'nubank' se existir, ou a primeira do usuário
+    const defaultDest =
+      userAccounts.find((a) => a.slug === 'nubank')?.slug ??
+      userAccounts[0]?.slug ??
+      'nubank';
+    setRedeemDestAccount(defaultDest);
+
     setIsRedeemOpen(true);
   }
 
@@ -245,13 +244,15 @@ export default function Investments() {
         method: 'POST',
         body: {
           account_id: redeemAccountId,
+          destination_account_id: redeemDestAccount || 'nubank',
           amount_cents: amountCents,
           month: redeemDate.slice(0, 7),
           date: redeemDate,
         },
       });
 
-      toast(`Resgate de ${formatBRL(res.redeemed_cents)} da ${res.account_name} creditado no Nubank!`);
+      const destName = userAccounts.find((a) => a.slug === redeemDestAccount)?.name ?? 'conta';
+      toast(`Resgate de ${formatBRL(res.redeemed_cents)} da ${res.account_name} creditado em ${destName}!`);
       setIsRedeemOpen(false);
       setRedeemAmount('');
       await load();
@@ -259,6 +260,49 @@ export default function Investments() {
       toast((err as Error).message, 'error');
     } finally {
       setRedeeming(false);
+    }
+  }
+
+  function openEditAccountModal(acc: InvestmentAccount) {
+    setEditingAccount(acc);
+    setEditAccountName(acc.name);
+    setEditAccountColor(acc.color);
+    setIsEditAccountOpen(true);
+  }
+
+  async function handleSaveEditAccount(e: FormEvent) {
+    e.preventDefault();
+    if (!editingAccount) return;
+    const name = editAccountName.trim().toUpperCase();
+    if (!name) return toast('Informe o nome da corretora', 'error');
+
+    try {
+      await api(`/investments/accounts/${editingAccount.id}`, {
+        method: 'PUT',
+        body: { name, color: editAccountColor },
+      });
+      toast(`Corretora ${name} atualizada!`);
+      setIsEditAccountOpen(false);
+      setEditingAccount(null);
+      await load();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function handleDeleteAccount(accId: number, accName: string) {
+    const confirmDelete = window.confirm(
+      `Deseja realmente excluir a corretora "${accName}" e todo o histórico de saldos dela? Esta ação não pode ser desfeita.`,
+    );
+    if (!confirmDelete) return;
+
+    try {
+      await api(`/investments/accounts/${accId}`, { method: 'DELETE' });
+      toast(`Corretora "${accName}" excluída.`);
+      if (isEditAccountOpen) setIsEditAccountOpen(false);
+      await load();
+    } catch (err) {
+      toast((err as Error).message, 'error');
     }
   }
 
@@ -271,7 +315,7 @@ export default function Investments() {
         method: 'POST',
         body: { name, color: newAccountColor },
       });
-      toast(`Conta ${name} adicionada!`);
+      toast(`Corretora ${name} adicionada!`);
       setNewAccountName('');
       setIsAddAccountOpen(false);
       await load();
@@ -280,17 +324,28 @@ export default function Investments() {
     }
   }
 
+  // Alocação por conta no mês ativo (carrega o saldo atual ou histórico mais recente de cada uma)
   const portfolioDistribution = useMemo(() => {
-    if (!data || !activeLatestMonth) return [];
+    if (!data) return [];
     return data.accounts.map((acc) => {
+      let bal = 0;
       const snap = snapshotMap.get(`${acc.id}_${activeLatestMonth}`);
+      if (snap) {
+        bal = snap.balance_cents;
+      } else {
+        bal = getPreviousBalance(acc.id, activeLatestMonth);
+      }
       return {
+        id: acc.id,
         name: acc.name,
-        amount_cents: snap?.balance_cents ?? 0,
+        amount_cents: bal,
         color: acc.color,
+        onRedeem: () => openRedeemModal(acc.id),
+        onEdit: () => openEditAccountModal(acc),
+        onDelete: () => handleDeleteAccount(acc.id, acc.name),
       };
     });
-  }, [data, activeLatestMonth, snapshotMap]);
+  }, [data, activeLatestMonth, snapshotMap, getPreviousBalance]);
 
   if (loading || !data) return <Spinner />;
 
@@ -319,7 +374,7 @@ export default function Investments() {
             onClick={() => openRedeemModal()}
             className="flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs font-bold text-amber-300 hover:bg-amber-500/20 transition active:scale-95"
           >
-            <IconArrowDownLeft className="h-4 w-4" /> Resgatar p/ Nubank
+            <IconArrowDownLeft className="h-4 w-4" /> Sacar / Resgatar
           </button>
           <button
             onClick={() => openMonthEditor(activeLatestMonth || new Date().toISOString().slice(0, 7))}
@@ -340,7 +395,7 @@ export default function Investments() {
             {formatBRL(latestSummary?.totalBalance ?? 0)}
           </p>
           <p className="mt-1 text-[11px] text-zinc-500">
-            Soma de {data.accounts.length} {data.accounts.length === 1 ? 'conta ativa' : 'contas ativas'}
+            Soma de {data.accounts.length} {data.accounts.length === 1 ? 'corretora cadastrada' : 'corretoras cadastradas'}
           </p>
         </Card>
 
@@ -355,12 +410,12 @@ export default function Investments() {
           >
             +{formatBRL(latestSummary?.valorizacaoInvest ?? 0)}
           </p>
-          <p className="mt-1 text-[11px] text-zinc-500">Ganhos de capital / juros registrados</p>
+          <p className="mt-1 text-[11px] text-zinc-500">Ganhos calculados automaticamente</p>
         </Card>
 
         <Card>
           <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-            Variação Líquida (Aportes − Saques)
+            Variação Líquida do Mês
           </p>
           <p
             className={`mt-1 text-2xl sm:text-3xl font-black tracking-tight tabular-nums ${
@@ -370,14 +425,14 @@ export default function Investments() {
             {(latestSummary?.totalDelta ?? 0) > 0 ? '+' : ''}
             {formatBRL(latestSummary?.totalDelta ?? 0)}
           </p>
-          <p className="mt-1 text-[11px] text-zinc-500">Resultado líquido de movimentações</p>
+          <p className="mt-1 text-[11px] text-zinc-500">Diferença de patrimônio vs mês anterior</p>
         </Card>
       </div>
 
-      {/* Distribuição da Carteira por Conta */}
+      {/* Distribuição da Carteira por Conta (Com botão de Sacar, Editar e Excluir) */}
       <DistributionChart
         title={`Alocação do Patrimônio (${formatMonthHeader(activeLatestMonth)})`}
-        subtitle="Participação percentual de cada conta/corretora no seu patrimônio total"
+        subtitle="Participação de cada corretora. Clique em Sacar para resgatar dinheiro para sua conta"
         items={portfolioDistribution}
       />
 
@@ -387,7 +442,7 @@ export default function Investments() {
           <div>
             <h2 className="font-bold text-sm text-white">Planilha de Evolução Patrimonial</h2>
             <p className="text-[11px] text-zinc-500">
-              Clique no cabeçalho de qualquer mês para editar os saldos ou use o botão para resgatar
+              Clique no cabeçalho do mês para atualizar saldos ou no ícone da instituição para editar
             </p>
           </div>
           <span className="rounded-lg bg-zinc-900 border border-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-zinc-400">
@@ -399,7 +454,7 @@ export default function Investments() {
           <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
             <thead>
               <tr className="border-b border-white/[0.08] bg-zinc-900/90 text-zinc-400 font-bold uppercase tracking-wider text-[11px]">
-                <th className="sticky left-0 z-20 bg-zinc-900 px-4 py-3 border-r border-white/[0.08] min-w-44">
+                <th className="sticky left-0 z-20 bg-zinc-900 px-4 py-3 border-r border-white/[0.08] min-w-48">
                   Instituição / Mês
                 </th>
                 {months.map((m) => (
@@ -431,14 +486,32 @@ export default function Investments() {
                         />
                         <span className="truncate">{acc.name}</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => openRedeemModal(acc.id)}
-                        className="rounded-md border border-white/[0.08] bg-zinc-900 px-1.5 py-0.5 text-[10px] text-amber-300/80 hover:bg-amber-500/20 hover:text-amber-200 transition"
-                        title={`Resgatar saldo de ${acc.name} para o Nubank`}
-                      >
-                        Resgatar
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openRedeemModal(acc.id)}
+                          className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/20 transition"
+                          title={`Sacar saldo de ${acc.name}`}
+                        >
+                          Sacar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEditAccountModal(acc)}
+                          className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                          title={`Editar ${acc.name}`}
+                        >
+                          <IconEdit className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAccount(acc.id, acc.name)}
+                          className="rounded-md p-1 text-zinc-500 hover:bg-red-500/20 hover:text-red-400 transition"
+                          title={`Excluir ${acc.name}`}
+                        >
+                          <IconTrash className="h-3 w-3" />
+                        </button>
+                      </div>
                     </td>
                     {months.map((m) => {
                       const snap = snapshotMap.get(`${acc.id}_${m}`);
@@ -532,7 +605,7 @@ export default function Investments() {
         </div>
       </Card>
 
-      {/* Modal: Atualizar Saldo do Mês (Cálculo Automático) */}
+      {/* Modal: Atualizar Saldo do Mês (100% Automático) */}
       {isUpdateModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
@@ -540,7 +613,7 @@ export default function Investments() {
               <div>
                 <h3 className="text-lg font-bold text-white">Atualizar Saldos do Mês</h3>
                 <p className="text-xs text-zinc-400">
-                  Defina o saldo de cada conta. A variação é calculada automaticamente!
+                  Defina o saldo final de cada corretora. O sistema calcula a rentabilidade sozinho!
                 </p>
               </div>
               <div className="flex items-center gap-1.5">
@@ -573,13 +646,13 @@ export default function Investments() {
               <div className="max-h-[60vh] overflow-y-auto space-y-3 pr-1">
                 {data.accounts.map((acc) => {
                   const prevBal = getPreviousBalance(acc.id, targetMonth);
-                  const currentCents = parseBRL(formBalances[acc.id] ?? '') ?? 0;
+                  const rawVal = formBalances[acc.id] ?? '';
+                  const currentCents = rawVal.trim() ? (parseBRL(rawVal) ?? 0) : prevBal;
                   const autoDiff = currentCents - prevBal;
                   const pct =
                     prevBal > 0
                       ? ((autoDiff / prevBal) * 100).toFixed(1)
                       : null;
-                  const isManual = manualDeltaEnabled[acc.id];
 
                   return (
                     <div
@@ -604,7 +677,7 @@ export default function Investments() {
                           Novo Saldo da Carteira (R$)
                         </label>
                         <input
-                          placeholder="0,00"
+                          placeholder={centsToInput(prevBal) || '0,00'}
                           inputMode="decimal"
                           value={formBalances[acc.id] ?? ''}
                           onChange={(e) =>
@@ -614,52 +687,23 @@ export default function Investments() {
                         />
                       </div>
 
-                      {/* Feedback automático de variação */}
-                      <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[11px] text-zinc-500">Variação calculada:</span>
-                          <span
-                            className={`text-xs font-bold tabular-nums ${
-                              autoDiff > 0
-                                ? 'text-emerald-400'
-                                : autoDiff < 0
-                                ? 'text-rose-400'
-                                : 'text-zinc-500'
-                            }`}
-                          >
-                            {autoDiff > 0 ? `+${formatBRL(autoDiff)}` : formatBRL(autoDiff)}
-                            {pct !== null && ` (${autoDiff > 0 ? '+' : ''}${pct}%)`}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setManualDeltaEnabled((p) => ({ ...p, [acc.id]: !p[acc.id] }))
-                          }
-                          className="text-[10px] text-zinc-500 hover:text-zinc-300 transition underline underline-offset-2"
+                      {/* Variação calculada automaticamente em tempo real */}
+                      <div className="flex items-center justify-between pt-1 text-xs px-1">
+                        <span className="text-[11px] text-zinc-500">Rentabilidade / Variação calculada:</span>
+                        <span
+                          className={`text-xs font-bold tabular-nums ${
+                            autoDiff > 0
+                              ? 'text-emerald-400'
+                              : autoDiff < 0
+                              ? 'text-rose-400'
+                              : 'text-zinc-500'
+                          }`}
                         >
-                          {isManual ? 'Voltar para cálculo automático' : 'Ajustar rendimento manual'}
-                        </button>
+                          {autoDiff > 0 ? `+${formatBRL(autoDiff)}` : formatBRL(autoDiff)}
+                          {pct !== null && ` (${autoDiff > 0 ? '+' : ''}${pct}%)`}
+                          {autoDiff > 0 ? ' ↗' : autoDiff < 0 ? ' ↘' : ''}
+                        </span>
                       </div>
-
-                      {/* Campo opcional de override manual de delta */}
-                      {isManual && (
-                        <div className="pt-2 border-t border-white/[0.06]">
-                          <label className="text-[10px] uppercase font-bold text-amber-400/90 block mb-1">
-                            Rendimento Manual / Saque Especificado (R$)
-                          </label>
-                          <input
-                            placeholder="Ex: 50,00 ou -200,00"
-                            inputMode="text"
-                            value={formDeltas[acc.id] ?? ''}
-                            onChange={(e) =>
-                              setFormDeltas((prev) => ({ ...prev, [acc.id]: e.target.value }))
-                            }
-                            className="w-full rounded-xl border border-amber-500/30 bg-zinc-950 px-3 py-1.5 text-xs text-white font-bold tabular-nums outline-none focus:border-amber-500/60"
-                          />
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -685,26 +729,26 @@ export default function Investments() {
         </div>
       )}
 
-      {/* Modal: Resgatar Investimento para Conta Nubank */}
+      {/* Modal: Saque / Resgate de Investimento */}
       {isRedeemOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-md rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
               <div>
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <IconArrowDownLeft className="h-5 w-5 text-amber-400" /> Resgatar p/ Nubank
+                  <IconArrowDownLeft className="h-5 w-5 text-amber-400" /> Saque / Resgate
                 </h3>
                 <p className="text-xs text-zinc-400 mt-0.5">
-                  Abate da carteira de investimento e credita no saldo em conta da Nubank.
+                  Abate da corretora e transfere o dinheiro para a conta selecionada.
                 </p>
               </div>
             </div>
 
             <form onSubmit={handleConfirmRedeem} className="mt-4 space-y-4">
-              {/* Seleção de Carteira */}
+              {/* Seleção de Carteira de Origem */}
               <div>
                 <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Carteira de Origem
+                  Corretora de Origem (Saque)
                 </label>
                 <select
                   value={redeemAccountId ?? ''}
@@ -721,15 +765,37 @@ export default function Investments() {
                   })}
                 </select>
                 <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
-                  <span>Disponível nesta carteira:</span>
+                  <span>Disponível nesta corretora:</span>
                   <span className="font-bold text-zinc-200">{formatBRL(selectedRedeemBal)}</span>
                 </div>
+              </div>
+
+              {/* Seleção de Conta de Destino */}
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
+                  Conta de Destino (Receber Saldo)
+                </label>
+                <select
+                  value={redeemDestAccount}
+                  onChange={(e) => setRedeemDestAccount(e.target.value)}
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 font-bold outline-none focus:border-amber-500/60"
+                >
+                  {userAccounts.length === 0 ? (
+                    <option value="nubank">NUBANK (Padrão)</option>
+                  ) : (
+                    userAccounts.map((uAcc) => (
+                      <option key={uAcc.slug} value={uAcc.slug}>
+                        {uAcc.name}
+                      </option>
+                    ))
+                  )}
+                </select>
               </div>
 
               {/* Valor do Resgate */}
               <div>
                 <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Valor a Resgatar (R$)
+                  Valor a Sacar (R$)
                 </label>
                 <input
                   placeholder="0,00"
@@ -762,7 +828,7 @@ export default function Investments() {
                       onClick={() => setRedeemAmount(centsToInput(selectedRedeemBal))}
                       className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 transition"
                     >
-                      Resgatar Tudo ({formatBRL(selectedRedeemBal)})
+                      Sacar Tudo ({formatBRL(selectedRedeemBal)})
                     </button>
                   )}
                 </div>
@@ -793,7 +859,7 @@ export default function Investments() {
                 >
                   {isRedeemOverLimit ? (
                     <p className="font-bold text-red-400">
-                      ⚠️ O valor a resgatar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível (
+                      ⚠️ O valor a sacar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível (
                       {formatBRL(selectedRedeemBal)}).
                     </p>
                   ) : (
@@ -805,13 +871,15 @@ export default function Investments() {
                         </span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-zinc-400">Destino (Conta NUBANK):</span>
+                        <span className="text-zinc-400">
+                          Destino ({userAccounts.find((a) => a.slug === redeemDestAccount)?.name ?? 'Conta'}):
+                        </span>
                         <span className="font-bold text-emerald-400">
                           +{formatBRL(parsedRedeemCents)} no saldo
                         </span>
                       </div>
                       <p className="text-[10px] text-zinc-500 pt-1 border-t border-white/[0.05]">
-                        Será lançada uma Entrada no extrato sob a conta NUBANK.
+                        Será lançada uma Entrada no extrato dessa conta.
                       </p>
                     </>
                   )}
@@ -830,7 +898,7 @@ export default function Investments() {
                   disabled={redeeming || parsedRedeemCents <= 0 || isRedeemOverLimit}
                   className="flex-1 rounded-xl bg-amber-400 py-2.5 text-xs font-extrabold text-black hover:bg-amber-300 transition disabled:opacity-50"
                 >
-                  {redeeming ? 'Processando…' : 'Confirmar Resgate'}
+                  {redeeming ? 'Processando…' : 'Confirmar Saque'}
                 </button>
               </div>
             </form>
@@ -838,11 +906,11 @@ export default function Investments() {
         </div>
       )}
 
-      {/* Modal: Adicionar Nova Conta */}
+      {/* Modal: Adicionar Nova Corretora */}
       {isAddAccountOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Nova Conta / Corretora</h3>
+            <h3 className="text-lg font-bold text-white">Nova Corretora / Carteira</h3>
             <p className="text-xs text-zinc-400 mt-0.5">Ex: XP, BTG, Nubank Caixinha, Inter...</p>
 
             <form onSubmit={handleAddAccount} className="mt-4 space-y-3.5">
@@ -883,7 +951,67 @@ export default function Investments() {
                   Cancelar
                 </button>
                 <button className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300">
-                  Criar Conta
+                  Criar Corretora
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Editar Corretora */}
+      {isEditAccountOpen && editingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Editar Corretora</h3>
+            <p className="text-xs text-zinc-400 mt-0.5">Altere o nome, cor ou remova esta corretora.</p>
+
+            <form onSubmit={handleSaveEditAccount} className="mt-4 space-y-3.5">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Nome da Instituição
+                </label>
+                <input
+                  value={editAccountName}
+                  onChange={(e) => setEditAccountName(e.target.value)}
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Cor de Identificação
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={editAccountColor}
+                    onChange={(e) => setEditAccountColor(e.target.value)}
+                    className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
+                  />
+                  <span className="text-xs font-mono font-bold text-zinc-300">{editAccountColor}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteAccount(editingAccount.id, editingAccount.name)}
+                  className="flex items-center justify-center gap-1 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-500/20 transition"
+                  title="Excluir corretora"
+                >
+                  <IconTrash className="h-4 w-4" /> Excluir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditAccountOpen(false)}
+                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button className="flex-1 rounded-xl bg-emerald-400 py-2 text-xs font-extrabold text-black hover:bg-emerald-300">
+                  Salvar
                 </button>
               </div>
             </form>

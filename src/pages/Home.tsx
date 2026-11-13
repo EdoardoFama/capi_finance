@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api, type Dashboard, type AccountBalance, type AccountId, ACCOUNT_DEFINITIONS } from '../api';
+import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS } from '../api';
 import { useMonth, useToast } from '../context';
 import { formatBRL, parseBRL, percent, currentMonth } from '../format';
 import {
   Card,
   IconCreditCard,
+  IconEdit,
   IconList,
   IconPlus,
+  IconTrash,
   IconWallet,
   MonthPicker,
   ProgressBar,
@@ -19,18 +21,19 @@ function AccountCard({
   account,
   month,
   onUpdate,
+  onEdit,
+  onDelete,
 }: {
   account: AccountBalance;
   month: string;
-  onUpdate: (accountId: AccountId, newInitialCents: number) => void;
+  onUpdate: (accountId: string, newInitialCents: number) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
-  const info = ACCOUNT_DEFINITIONS.find((a) => a.id === account.account_id) ?? {
+  const info = {
     id: account.account_id,
     name: account.name,
-    tag: account.name,
-    color: '#10b981',
-    badgeClass: 'bg-zinc-800 text-zinc-300 border-zinc-700',
-    borderClass: 'border-zinc-800',
+    color: account.color || ACCOUNT_DEFINITIONS.find((a) => a.id === account.account_id)?.color || '#10b981',
   };
 
   const toast = useToast();
@@ -90,13 +93,35 @@ function AccountCard({
               {info.name}
             </span>
           </div>
-          <Link
-            to={`/lancar?conta=${account.account_id}`}
-            title={`Lançar gasto em ${info.name}`}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/[0.06] bg-zinc-900/80 text-zinc-400 transition hover:border-emerald-500/40 hover:bg-emerald-500/15 hover:text-emerald-300"
-          >
-            <IconPlus className="h-3.5 w-3.5" />
-          </Link>
+          <div className="flex items-center gap-1">
+            {onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                title={`Editar conta ${info.name}`}
+              >
+                <IconEdit className="h-3 w-3" />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-red-500/20 hover:text-red-400 transition"
+                title={`Excluir conta ${info.name}`}
+              >
+                <IconTrash className="h-3 w-3" />
+              </button>
+            )}
+            <Link
+              to={`/lancar?conta=${account.account_id}`}
+              title={`Lançar em ${info.name}`}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-white/[0.06] bg-zinc-900/80 text-zinc-400 transition hover:border-emerald-500/40 hover:bg-emerald-500/15 hover:text-emerald-300"
+            >
+              <IconPlus className="h-3 w-3" />
+            </Link>
+          </div>
         </div>
 
         {/* Saldo Atual (Restante) */}
@@ -163,6 +188,7 @@ function AccountCard({
 
 export default function Home() {
   const { month } = useMonth();
+  const toast = useToast();
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState('');
   const [fixedFilter, setFixedFilter] = useState<'all' | 'available' | 'done'>('all');
@@ -183,7 +209,86 @@ export default function Home() {
     return loadDashboard();
   }, [loadDashboard]);
 
-  function handleAccountInitialUpdate(accountId: AccountId, newInitialCents: number) {
+  // Modais de Criação e Edição de Contas do Usuário
+  const [isAddUserAccountOpen, setIsAddUserAccountOpen] = useState(false);
+  const [newAccName, setNewAccName] = useState('');
+  const [newAccColor, setNewAccColor] = useState('#10b981');
+  const [newAccBalance, setNewAccBalance] = useState('');
+
+  const [isEditUserAccountOpen, setIsEditUserAccountOpen] = useState(false);
+  const [editingUserAccount, setEditingUserAccount] = useState<AccountBalance | null>(null);
+  const [editAccName, setEditAccName] = useState('');
+  const [editAccColor, setEditAccColor] = useState('#10b981');
+
+  async function handleCreateUserAccount(e: FormEvent) {
+    e.preventDefault();
+    const name = newAccName.trim().toUpperCase();
+    if (!name) return toast('Informe o nome da conta', 'error');
+
+    try {
+      const created = await api<{ id: number; slug: string; name: string; color: string }>('/accounts', {
+        method: 'POST',
+        body: { name, color: newAccColor },
+      });
+
+      const initCents = parseBRL(newAccBalance);
+      if (initCents !== null && initCents > 0) {
+        await api('/accounts/balance', {
+          method: 'PUT',
+          body: { month, account_id: created.slug, initial_cents: initCents },
+        });
+      }
+
+      toast(`Conta ${name} adicionada!`);
+      setIsAddUserAccountOpen(false);
+      setNewAccName('');
+      setNewAccBalance('');
+      loadDashboard();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function handleSaveEditUserAccount(e: FormEvent) {
+    e.preventDefault();
+    if (!editingUserAccount) return;
+    const name = editAccName.trim().toUpperCase();
+    if (!name) return toast('Informe o nome da conta', 'error');
+
+    try {
+      if (editingUserAccount.id) {
+        await api(`/accounts/${editingUserAccount.id}`, {
+          method: 'PUT',
+          body: { name, color: editAccColor },
+        });
+      }
+      toast(`Conta ${name} atualizada!`);
+      setIsEditUserAccountOpen(false);
+      setEditingUserAccount(null);
+      loadDashboard();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function handleDeleteUserAccount(acc: AccountBalance) {
+    const confirm = window.confirm(
+      `Tem certeza que deseja excluir a conta "${acc.name}"? Os saldos definidos para ela serão removidos.`,
+    );
+    if (!confirm) return;
+
+    try {
+      if (acc.id) {
+        await api(`/accounts/${acc.id}`, { method: 'DELETE' });
+      }
+      toast(`Conta "${acc.name}" excluída.`);
+      loadDashboard();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  function handleAccountInitialUpdate(accountId: string, newInitialCents: number) {
     setData((prev) => {
       if (!prev) return prev;
       const updatedAccounts = (prev.accounts ?? []).map((acc) => {
@@ -402,26 +507,61 @@ export default function Home() {
                   </p>
                 </div>
               </div>
-              <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-3 py-1.5 text-right">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 block">
-                  Soma disponível
-                </span>
-                <span className="text-xs font-extrabold text-emerald-400 tabular-nums">
-                  {formatBRL(metrics.totalAccountBalances)}
-                </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserAccountOpen(true)}
+                  className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-1.5 text-xs font-bold text-zinc-200 hover:bg-zinc-800 transition active:scale-95"
+                >
+                  <IconPlus className="h-3.5 w-3.5 text-emerald-400" /> Nova Conta
+                </button>
+                <div className="rounded-xl border border-white/[0.07] bg-zinc-900/70 px-3 py-1.5 text-right">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 block">
+                    Soma disponível
+                  </span>
+                  <span className="text-xs font-extrabold text-emerald-400 tabular-nums">
+                    {formatBRL(metrics.totalAccountBalances)}
+                  </span>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {(data.accounts ?? []).map((acc) => (
-                <AccountCard
-                  key={acc.account_id}
-                  account={acc}
-                  month={month}
-                  onUpdate={handleAccountInitialUpdate}
-                />
-              ))}
-            </div>
+            {data.accounts.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/10 bg-zinc-950/60 p-6 text-center">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 mb-2">
+                  <IconWallet className="h-5 w-5" />
+                </div>
+                <p className="text-sm font-bold text-zinc-200">Nenhuma conta cadastrada</p>
+                <p className="text-xs text-zinc-500 mt-1 max-w-sm mx-auto">
+                  Cadastre suas contas correntes (ex: Nubank, Inter) ou vales (ex: Alelo, Pluxe, VR) para acompanhar seus saldos disponíveis.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserAccountOpen(true)}
+                  className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-4 py-2 text-xs font-extrabold text-black hover:bg-emerald-300 transition active:scale-95"
+                >
+                  <IconPlus className="h-4 w-4" /> Cadastrar Conta
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {data.accounts.map((acc) => (
+                  <AccountCard
+                    key={acc.account_id}
+                    account={acc}
+                    month={month}
+                    onUpdate={handleAccountInitialUpdate}
+                    onEdit={() => {
+                      setEditingUserAccount(acc);
+                      setEditAccName(acc.name);
+                      setEditAccColor(acc.color || '#10b981');
+                      setIsEditUserAccountOpen(true);
+                    }}
+                    onDelete={() => handleDeleteUserAccount(acc)}
+                  />
+                ))}
+              </div>
+            )}
           </section>
 
           {/* ================= CATEGORIAS FIXAS ================= */}
@@ -704,6 +844,132 @@ export default function Home() {
             )}
           </section>
         </>
+      )}
+
+      {/* Modal: Adicionar Nova Conta do Usuário */}
+      {isAddUserAccountOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Nova Conta / Benefício</h3>
+            <p className="text-xs text-zinc-400 mt-0.5">Ex: Nubank, Inter, Alelo, VR, Flash...</p>
+
+            <form onSubmit={handleCreateUserAccount} className="mt-4 space-y-3.5">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Nome da Conta / Cartão
+                </label>
+                <input
+                  value={newAccName}
+                  onChange={(e) => setNewAccName(e.target.value)}
+                  placeholder="EX: NUBANK, ALELO..."
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Saldo Inicial do Mês (Opcional)
+                </label>
+                <input
+                  placeholder="0,00"
+                  inputMode="decimal"
+                  value={newAccBalance}
+                  onChange={(e) => setNewAccBalance(e.target.value)}
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Cor de Identificação
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={newAccColor}
+                    onChange={(e) => setNewAccColor(e.target.value)}
+                    className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
+                  />
+                  <span className="text-xs font-mono font-bold text-zinc-300">{newAccColor}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserAccountOpen(false)}
+                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300">
+                  Criar Conta
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Editar Conta do Usuário */}
+      {isEditUserAccountOpen && editingUserAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Editar Conta / Benefício</h3>
+            <p className="text-xs text-zinc-400 mt-0.5">Altere o nome, cor ou exclua esta conta.</p>
+
+            <form onSubmit={handleSaveEditUserAccount} className="mt-4 space-y-3.5">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Nome da Conta
+                </label>
+                <input
+                  value={editAccName}
+                  onChange={(e) => setEditAccName(e.target.value)}
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+                  Cor de Identificação
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={editAccColor}
+                    onChange={(e) => setEditAccColor(e.target.value)}
+                    className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
+                  />
+                  <span className="text-xs font-mono font-bold text-zinc-300">{editAccColor}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteUserAccount(editingUserAccount)}
+                  className="flex items-center justify-center gap-1 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-500/20 transition"
+                  title="Excluir conta"
+                >
+                  <IconTrash className="h-4 w-4" /> Excluir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditUserAccountOpen(false)}
+                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button className="flex-1 rounded-xl bg-emerald-400 py-2 text-xs font-extrabold text-black hover:bg-emerald-300">
+                  Salvar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Botão flutuante (desktop) */}

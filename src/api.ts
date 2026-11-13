@@ -49,16 +49,24 @@ export type Category = {
   is_fixed?: number;
 };
 
-export type AccountId = 'nubank' | 'pluxe_alimentacao' | 'pluxe_refeicao' | 'alelo';
+export type AccountId = string;
 export type PaymentMethod = 'debit' | 'pix' | 'credit' | 'voucher';
 
+export type UserAccount = {
+  id: number;
+  slug: string;
+  name: string;
+  color: string;
+  sort_order: number;
+};
+
 export type AccountInfo = {
-  id: AccountId;
+  id: string;
   name: string;
   tag: string;
   color: string;
-  badgeClass: string;
-  borderClass: string;
+  badgeClass?: string;
+  borderClass?: string;
 };
 
 export const ACCOUNT_DEFINITIONS: AccountInfo[] = [
@@ -97,8 +105,10 @@ export const ACCOUNT_DEFINITIONS: AccountInfo[] = [
 ];
 
 export type AccountBalance = {
-  account_id: AccountId;
+  id?: number;
+  account_id: string;
   name: string;
+  color?: string;
   initial_cents: number;
   spent_cents: number;
   current_cents: number;

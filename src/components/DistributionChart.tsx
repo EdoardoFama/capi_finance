@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
 import { formatBRL } from '../format';
+import { IconArrowDownLeft, IconEdit, IconTrash } from './ui';
 
 export type DistributionItem = {
+  id?: number;
   name: string;
   amount_cents: number;
   color?: string;
+  onRedeem?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 };
 
 const PALETTE = [
@@ -46,31 +51,30 @@ export default function DistributionChart({
 }: Props) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
-  // Filtra itens com valor > 0 e ordena do maior para o menor
-  const sortedItems = useMemo(() => {
-    return (items || [])
-      .map((it) => ({
-        ...it,
-        name: it.name || 'Sem categoria',
-        amount_cents: Number(it.amount_cents || 0),
-      }))
-      .filter((it) => it.amount_cents > 0)
-      .sort((a, b) => b.amount_cents - a.amount_cents)
-      .map((it, idx) => ({
-        ...it,
-        color: it.color || getPaletteColor(idx),
-      }));
+  // Mapeia todos os itens (não remove os com saldo 0 para permitir visualizar e gerenciar todas as corretoras)
+  const allItems = useMemo(() => {
+    return (items || []).map((it, idx) => ({
+      ...it,
+      name: it.name || 'Sem nome',
+      amount_cents: Math.max(0, Number(it.amount_cents || 0)),
+      color: it.color || getPaletteColor(idx),
+    }));
   }, [items]);
 
   const totalCents = useMemo(() => {
-    return sortedItems.reduce((acc, it) => acc + it.amount_cents, 0);
-  }, [sortedItems]);
+    return allItems.reduce((acc, it) => acc + it.amount_cents, 0);
+  }, [allItems]);
 
-  if (totalCents <= 0 || sortedItems.length === 0) {
+  // Itens com saldo positivo para a barra colorida proporcional
+  const positiveItems = useMemo(() => {
+    return allItems.filter((it) => it.amount_cents > 0);
+  }, [allItems]);
+
+  if (!items || items.length === 0) {
     return null;
   }
 
-  const activeItem = hoveredIdx !== null ? sortedItems[hoveredIdx] : null;
+  const activeItem = hoveredIdx !== null ? allItems[hoveredIdx] : null;
 
   return (
     <div className={`rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-4 sm:p-5 shadow-xl shadow-black/40 backdrop-blur-sm ${className}`}>
@@ -80,7 +84,7 @@ export default function DistributionChart({
           <div className="flex items-center gap-2">
             <h3 className="text-sm sm:text-base font-bold tracking-tight text-white">{title}</h3>
             <span className="rounded-full bg-zinc-900 border border-white/[0.07] px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
-              {sortedItems.length} {sortedItems.length === 1 ? 'categoria' : 'categorias'}
+              {allItems.length} {allItems.length === 1 ? 'instituição' : 'instituições'}
             </span>
           </div>
           {subtitle && <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>}
@@ -91,7 +95,11 @@ export default function DistributionChart({
           </p>
           <p className="text-base sm:text-lg font-extrabold text-white tabular-nums">
             {activeItem
-              ? `${formatBRL(activeItem.amount_cents)} (${((activeItem.amount_cents / totalCents) * 100).toFixed(1)}%)`
+              ? `${formatBRL(activeItem.amount_cents)}${
+                  totalCents > 0
+                    ? ` (${((activeItem.amount_cents / totalCents) * 100).toFixed(1)}%)`
+                    : ''
+                }`
               : formatBRL(totalCents)}
           </p>
         </div>
@@ -100,43 +108,50 @@ export default function DistributionChart({
       {/* Barra Multicolorida Segmentada Interativa */}
       <div className="mt-4">
         <div className="h-4 w-full overflow-hidden rounded-full bg-zinc-900 p-0.5 flex gap-0.5 ring-1 ring-inset ring-white/[0.06]">
-          {sortedItems.map((it, idx) => {
-            const pct = (it.amount_cents / totalCents) * 100;
-            const isDimmed = hoveredIdx !== null && hoveredIdx !== idx;
-            return (
-              <div
-                key={`segment-${it.name}-${idx}`}
-                onMouseEnter={() => setHoveredIdx(idx)}
-                onMouseLeave={() => setHoveredIdx(null)}
-                style={{
-                  width: `${Math.max(pct, 1.2)}%`,
-                  backgroundColor: it.color,
-                  opacity: isDimmed ? 0.3 : 1,
-                }}
-                className="h-full cursor-pointer transition-all duration-300 first:rounded-l-full last:rounded-r-full"
-                title={`${it.name}: ${formatBRL(it.amount_cents)} (${pct.toFixed(1)}%)`}
-              />
-            );
-          })}
+          {positiveItems.length === 0 ? (
+            <div className="h-full w-full rounded-full bg-zinc-900 flex items-center justify-center text-[10px] text-zinc-600 font-medium">
+              Sem saldo distribuído neste período
+            </div>
+          ) : (
+            positiveItems.map((it, idx) => {
+              const pct = totalCents > 0 ? (it.amount_cents / totalCents) * 100 : 0;
+              const isDimmed = hoveredIdx !== null && allItems[hoveredIdx]?.name !== it.name;
+              return (
+                <div
+                  key={`segment-${it.name}-${idx}`}
+                  onMouseEnter={() => setHoveredIdx(allItems.findIndex((a) => a.name === it.name))}
+                  onMouseLeave={() => setHoveredIdx(null)}
+                  style={{
+                    width: `${Math.max(pct, 1.2)}%`,
+                    backgroundColor: it.color,
+                    opacity: isDimmed ? 0.3 : 1,
+                  }}
+                  className="h-full cursor-pointer transition-all duration-300 first:rounded-l-full last:rounded-r-full"
+                  title={`${it.name}: ${formatBRL(it.amount_cents)} (${pct.toFixed(1)}%)`}
+                />
+              );
+            })
+          )}
         </div>
       </div>
 
-      {/* Grid de Legendas com Mini Barra, Porcentagem e Valores */}
+      {/* Grid de Cards ("Quadradinhos") de Cada Carteira / Corretora */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {sortedItems.map((it, idx) => {
-          const pct = (it.amount_cents / totalCents) * 100;
+        {allItems.map((it, idx) => {
+          const pct = totalCents > 0 ? (it.amount_cents / totalCents) * 100 : 0;
           const isHovered = hoveredIdx === idx;
           return (
             <div
               key={`legend-${it.name}-${idx}`}
               onMouseEnter={() => setHoveredIdx(idx)}
               onMouseLeave={() => setHoveredIdx(null)}
-              className={`group relative overflow-hidden rounded-xl border p-2.5 transition-all duration-200 ${
+              className={`group relative overflow-hidden rounded-xl border p-3 transition-all duration-200 ${
                 isHovered
                   ? 'border-white/20 bg-zinc-900/90 shadow-md scale-[1.01]'
                   : 'border-white/[0.06] bg-zinc-900/35 hover:border-white/15 hover:bg-zinc-900/60'
               }`}
             >
+              {/* Topo do Card: Nome, Ações de Edição e Porcentagem */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <span
@@ -146,6 +161,35 @@ export default function DistributionChart({
                   <span className="truncate text-xs font-bold text-zinc-100" title={it.name}>
                     {it.name}
                   </span>
+                  {/* Botões de Ação rápida (Editar / Excluir Corretora) */}
+                  <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition">
+                    {it.onEdit && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          it.onEdit?.();
+                        }}
+                        className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                        title={`Editar corretora ${it.name}`}
+                      >
+                        <IconEdit className="h-3 w-3" />
+                      </button>
+                    )}
+                    {it.onDelete && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          it.onDelete?.();
+                        }}
+                        className="rounded p-1 text-zinc-500 hover:bg-red-500/20 hover:text-red-400 transition"
+                        title={`Excluir corretora ${it.name}`}
+                      >
+                        <IconTrash className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <span
@@ -159,7 +203,8 @@ export default function DistributionChart({
                 </span>
               </div>
 
-              <div className="mt-2 flex items-center justify-between gap-2">
+              {/* Barra de Progresso e Valor */}
+              <div className="mt-2.5 flex items-center justify-between gap-2">
                 <div className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800/80">
                   <div
                     className="h-full rounded-full transition-all duration-500"
@@ -169,10 +214,37 @@ export default function DistributionChart({
                     }}
                   />
                 </div>
-                <span className="text-[11px] font-semibold text-zinc-300 tabular-nums shrink-0">
+                <span className="text-xs font-bold text-zinc-100 tabular-nums shrink-0">
                   {formatBRL(it.amount_cents)}
                 </span>
               </div>
+
+              {/* Botão de SAQUE direto no Quadradinho */}
+              {it.onRedeem && (
+                <div className="mt-3 pt-2.5 border-t border-white/[0.06] flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      it.onRedeem?.();
+                    }}
+                    disabled={it.amount_cents <= 0}
+                    className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-bold transition active:scale-95 ${
+                      it.amount_cents > 0
+                        ? 'border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-500/50'
+                        : 'border border-white/[0.06] bg-zinc-900 text-zinc-600 cursor-not-allowed'
+                    }`}
+                    title={
+                      it.amount_cents > 0
+                        ? `Sacar / Resgatar de ${it.name}`
+                        : `Sem saldo disponível para saque em ${it.name}`
+                    }
+                  >
+                    <IconArrowDownLeft className="h-3.5 w-3.5" />
+                    <span>Sacar</span>
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}

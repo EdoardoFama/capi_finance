@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { api, type Category, type Expense, type Inflow, ACCOUNT_DEFINITIONS } from '../api';
+import { api, type Category, type Expense, type Inflow, type UserAccount } from '../api';
 import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import {
@@ -45,6 +45,7 @@ export default function History() {
   const [expenses, setExpenses] = useState<Expense[] | null>(null);
   const [inflows, setInflows] = useState<Inflow[] | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
 
   // Filtros
   const initialCategory = searchParams.get('categoria') || 'all';
@@ -73,14 +74,16 @@ export default function History() {
 
   const load = useCallback(async () => {
     try {
-      const [e, inf, c] = await Promise.all([
+      const [e, inf, c, accs] = await Promise.all([
         api<Expense[]>(`/expenses?month=${month}`),
         api<Inflow[]>(`/inflows?month=${month}`),
         api<Category[]>('/categories'),
+        api<UserAccount[]>('/accounts').catch(() => []),
       ]);
       setExpenses(e);
       setInflows(inf);
       setCategories(c);
+      setUserAccounts(accs);
     } catch (err) {
       toast((err as Error).message, 'error');
     }
@@ -120,7 +123,7 @@ export default function History() {
   }
 
   async function removeInflow(inf: Inflow) {
-    const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+    const accInfo = userAccounts.find((a) => a.slug === inf.account_id);
     if (
       !confirm(
         `Deseja excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n` +
@@ -411,19 +414,19 @@ export default function History() {
           >
             Todas as Contas
           </button>
-          {ACCOUNT_DEFINITIONS.map((acc) => (
+          {userAccounts.map((acc) => (
             <button
-              key={acc.id}
+              key={acc.slug}
               type="button"
-              onClick={() => setSelectedAccount(acc.id)}
+              onClick={() => setSelectedAccount(acc.slug)}
               className={`shrink-0 flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
-                selectedAccount === acc.id
-                  ? `${acc.badgeClass} border-current`
+                selectedAccount === acc.slug
+                  ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
                   : 'border-white/[0.07] bg-zinc-900 text-zinc-400 hover:text-white'
               }`}
             >
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
-              {acc.tag}
+              {acc.name}
             </button>
           ))}
         </div>
@@ -500,7 +503,7 @@ export default function History() {
                 {items.map((item) => {
                   if (item.kind === 'inflow') {
                     const inf = item.data;
-                    const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+                    const accInfo = userAccounts.find((a) => a.slug === inf.account_id);
                     return (
                       <div
                         key={item.id}
@@ -515,11 +518,9 @@ export default function History() {
                               Entrada
                             </span>
                             <span
-                              className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
-                                accInfo?.badgeClass ?? 'bg-zinc-800 text-zinc-300'
-                              }`}
+                              className="rounded-md px-2 py-0.5 text-[10px] font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700"
                             >
-                              {accInfo?.tag ?? inf.account_id}
+                              {accInfo?.name ?? inf.account_id}
                             </span>
                           </div>
                           <p className="text-xs text-zinc-500 mt-0.5">Crédito em conta</p>

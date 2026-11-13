@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import {
   api,
   type Dashboard,
@@ -57,27 +57,15 @@ export default function Expenses() {
   const [categoryId, setCategoryId] = useState<number | null>(Number(params.get('categoria')) || null);
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(todayISO);
-  const [accountId, setAccountId] = useState<AccountId>(
-    (params.get('conta') as AccountId) &&
-      ['nubank', 'pluxe_alimentacao', 'pluxe_refeicao', 'alelo'].includes(params.get('conta') as string)
-      ? (params.get('conta') as AccountId)
-      : 'nubank',
-  );
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
-    params.get('conta') && params.get('conta') !== 'nubank' ? 'voucher' : 'debit',
-  );
+  const [accountId, setAccountId] = useState<string>(params.get('conta') || '');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debit');
   const [installments, setInstallments] = useState(1);
   const [isInstallmentModalOpen, setIsInstallmentModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Estados do Formulário de Entrada
   const [inflowAmount, setInflowAmount] = useState('');
-  const [inflowAccountId, setInflowAccountId] = useState<AccountId>(
-    (params.get('conta') as AccountId) &&
-      ['nubank', 'pluxe_alimentacao', 'pluxe_refeicao', 'alelo'].includes(params.get('conta') as string)
-      ? (params.get('conta') as AccountId)
-      : 'nubank',
-  );
+  const [inflowAccountId, setInflowAccountId] = useState<string>(params.get('conta') || '');
   const [inflowDescription, setInflowDescription] = useState('');
   const [inflowDate, setInflowDate] = useState(todayISO);
   const [inflowBusy, setInflowBusy] = useState(false);
@@ -107,6 +95,29 @@ export default function Expenses() {
       setParams({}, { replace: true });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const accountsList = useMemo(() => {
+    if (dash?.accounts && dash.accounts.length > 0) {
+      return dash.accounts.map((a) => ({
+        id: a.account_id,
+        name: a.name,
+        color: a.color || '#10b981',
+        current_cents: a.current_cents,
+      }));
+    }
+    return [];
+  }, [dash?.accounts]);
+
+  useEffect(() => {
+    if (accountsList.length > 0) {
+      if (!accountId || !accountsList.some((a) => a.id === accountId)) {
+        setAccountId(accountsList[0].id);
+      }
+      if (!inflowAccountId || !accountsList.some((a) => a.id === inflowAccountId)) {
+        setInflowAccountId(accountsList[0].id);
+      }
+    }
+  }, [accountsList, accountId, inflowAccountId]);
 
   const selected = dash?.categories.find((c) => c.id === categoryId);
 
@@ -142,7 +153,7 @@ export default function Expenses() {
         },
       });
 
-      const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === accountId);
+      const accInfo = accountsList.find((a) => a.id === accountId);
       if (accountId === 'nubank' && paymentMethod === 'credit' && installments > 1) {
         toast(`${formatBRL(cents)} parcelado em ${installments}x de ${formatBRL(Math.round(cents / installments))}`);
       } else {
@@ -184,7 +195,7 @@ export default function Expenses() {
         },
       });
 
-      const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inflowAccountId);
+      const accInfo = accountsList.find((a) => a.id === inflowAccountId);
       toast(`+ ${formatBRL(cents)} creditado no saldo de ${accInfo?.name ?? 'Conta'}!`);
 
       setInflowAmount('');
@@ -229,7 +240,7 @@ export default function Expenses() {
 
   // Exclusão de Entrada
   async function removeInflow(inf: Inflow) {
-    const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+    const accInfo = accountsList.find((a) => a.id === inf.account_id);
     if (
       !confirm(
         `Excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n` +
@@ -369,37 +380,45 @@ export default function Expenses() {
                 Carteira de Destino (Receberá o saldo) <span className="text-emerald-400">*</span>
               </label>
 
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                {ACCOUNT_DEFINITIONS.map((acc) => {
-                  const active = inflowAccountId === acc.id;
-                  const accBalance = dash?.accounts?.find((a) => a.account_id === acc.id);
-                  return (
-                    <button
-                      type="button"
-                      key={acc.id}
-                      onClick={() => setInflowAccountId(acc.id)}
-                      className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
-                        active
-                          ? `${acc.badgeClass} ring-2 ring-current border-current shadow-lg scale-[1.02]`
-                          : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-2.5 w-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: acc.color }}
-                        />
-                        <span className="font-extrabold text-[11px] sm:text-xs text-zinc-100 truncate">
-                          {acc.tag}
+              {accountsList.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 bg-zinc-900/40 p-4 text-center">
+                  <p className="text-xs text-zinc-400">Você ainda não tem contas cadastradas.</p>
+                  <Link to="/" className="text-xs font-bold text-emerald-400 hover:underline mt-1 inline-block">
+                    + Cadastrar Conta na Tela Inicial
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {accountsList.map((acc) => {
+                    const active = inflowAccountId === acc.id;
+                    return (
+                      <button
+                        type="button"
+                        key={acc.id}
+                        onClick={() => setInflowAccountId(acc.id)}
+                        className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
+                          active
+                            ? 'border-emerald-500/80 bg-emerald-500/15 ring-2 ring-emerald-500/30 shadow-lg scale-[1.02]'
+                            : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: acc.color }}
+                          />
+                          <span className="font-extrabold text-[11px] sm:text-xs text-zinc-100 truncate">
+                            {acc.name}
+                          </span>
+                        </div>
+                        <span className="mt-2 text-[11px] font-semibold tabular-nums text-zinc-400">
+                          Saldo: {formatBRL(acc.current_cents)}
                         </span>
-                      </div>
-                      <span className="mt-2 text-[11px] font-semibold tabular-nums text-zinc-400">
-                        {accBalance ? `Saldo: ${formatBRL(accBalance.current_cents)}` : '—'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* 3. Descrição / Origem do Recurso com atalhos */}
@@ -496,92 +515,92 @@ export default function Expenses() {
                 Origem do Pagamento (Conta / Benefício)
               </label>
 
-              {/* 4 Mostradores/Botões de Conta */}
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                {ACCOUNT_DEFINITIONS.map((acc) => {
-                  const active = accountId === acc.id;
-                  const accBalance = dash?.accounts?.find((a) => a.account_id === acc.id);
-                  return (
-                    <button
-                      type="button"
-                      key={acc.id}
-                      onClick={() => {
-                        setAccountId(acc.id);
-                        if (acc.id !== 'nubank') {
-                          setPaymentMethod('voucher');
-                          setInstallments(1);
-                        } else if (paymentMethod === 'voucher') {
-                          setPaymentMethod('debit');
-                        }
-                      }}
-                      className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
-                        active
-                          ? `${acc.badgeClass} ring-2 ring-current border-current shadow-lg`
-                          : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-2.5 w-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: acc.color }}
-                        />
-                        <span className="font-extrabold text-[11px] sm:text-xs text-zinc-100 truncate">
-                          {acc.tag}
+              {/* Mostradores/Botões de Conta Dinâmicos */}
+              {accountsList.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 bg-zinc-900/40 p-4 text-center">
+                  <p className="text-xs text-zinc-400">Você ainda não tem contas cadastradas.</p>
+                  <Link to="/" className="text-xs font-bold text-emerald-400 hover:underline mt-1 inline-block">
+                    + Cadastrar Conta na Tela Inicial
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {accountsList.map((acc) => {
+                    const active = accountId === acc.id;
+                    return (
+                      <button
+                        type="button"
+                        key={acc.id}
+                        onClick={() => {
+                          setAccountId(acc.id);
+                        }}
+                        className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
+                          active
+                            ? 'border-emerald-500/80 bg-emerald-500/15 ring-2 ring-emerald-500/30 shadow-lg'
+                            : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: acc.color }}
+                          />
+                          <span className="font-extrabold text-[11px] sm:text-xs text-zinc-100 truncate">
+                            {acc.name}
+                          </span>
+                        </div>
+                        <span className="mt-2 text-[11px] font-semibold tabular-nums text-zinc-400">
+                          {formatBRL(acc.current_cents)}
                         </span>
-                      </div>
-                      <span className="mt-2 text-[11px] font-semibold tabular-nums text-zinc-400">
-                        {accBalance ? formatBRL(accBalance.current_cents) : '—'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Sub-opções se a conta for Nubank */}
-              {accountId === 'nubank' && (
-                <div className="grid grid-cols-3 gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPaymentMethod('debit')}
-                    className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
-                      paymentMethod === 'debit'
-                        ? 'border-purple-400 bg-purple-500/20 text-purple-200 ring-1 ring-purple-400/50'
-                        : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
-                    }`}
-                  >
-                    <span>Débito</span>
-                    <span className="text-[10px] font-normal text-zinc-500">Abate na hora</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPaymentMethod('pix')}
-                    className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
-                      paymentMethod === 'pix'
-                        ? 'border-purple-400 bg-purple-500/20 text-purple-200 ring-1 ring-purple-400/50'
-                        : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
-                    }`}
-                  >
-                    <span>Pix</span>
-                    <span className="text-[10px] font-normal text-zinc-500">Transferência</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPaymentMethod('credit')}
-                    className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
-                      paymentMethod === 'credit'
-                        ? 'border-purple-400 bg-purple-500/20 text-purple-200 ring-1 ring-purple-400/50'
-                        : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
-                    }`}
-                  >
-                    <span>Crédito</span>
-                    <span className="text-[10px] font-normal text-zinc-400">
-                      {installments > 1 ? `${installments}x parcelas` : 'Vai p/ fatura'}
-                    </span>
-                  </button>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
+
+              {/* Formas de pagamento */}
+              <div className="grid grid-cols-3 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('debit')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
+                    paymentMethod === 'debit'
+                      ? 'border-emerald-500 bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/50'
+                      : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
+                  }`}
+                >
+                  <span>Débito</span>
+                  <span className="text-[10px] font-normal text-zinc-500">Abate na hora</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('pix')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
+                    paymentMethod === 'pix'
+                      ? 'border-teal-500 bg-teal-500/20 text-teal-200 ring-1 ring-teal-500/50'
+                      : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
+                  }`}
+                >
+                  <span>Pix</span>
+                  <span className="text-[10px] font-normal text-zinc-500">Transferência</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPaymentMethod('credit')}
+                  className={`flex flex-col items-center justify-center rounded-xl border py-2.5 text-xs font-bold transition ${
+                    paymentMethod === 'credit'
+                      ? 'border-purple-400 bg-purple-500/20 text-purple-200 ring-1 ring-purple-400/50'
+                      : 'border-white/[0.07] bg-zinc-900/50 text-zinc-400 hover:border-white/15'
+                  }`}
+                >
+                  <span>Crédito</span>
+                  <span className="text-[10px] font-normal text-zinc-400">
+                    {installments > 1 ? `${installments}x parcelas` : 'Vai p/ fatura'}
+                  </span>
+                </button>
+              </div>
             </div>
 
             {/* 3. SELEÇÃO DE CATEGORIA (AGRUPADA POR FIXAS E VARIÁVEIS) */}
@@ -903,7 +922,7 @@ export default function Expenses() {
                   {items.map((item) => {
                     if (item.kind === 'inflow') {
                       const inf = item.data;
-                      const accInfo = ACCOUNT_DEFINITIONS.find((a) => a.id === inf.account_id);
+                      const accInfo = accountsList.find((a) => a.id === inf.account_id);
                       return (
                         <div
                           key={item.id}
@@ -918,11 +937,9 @@ export default function Expenses() {
                                 Entrada
                               </span>
                               <span
-                                className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
-                                  accInfo?.badgeClass ?? 'bg-zinc-800 text-zinc-300'
-                                }`}
+                                className="rounded-md px-2 py-0.5 text-[10px] font-semibold border bg-zinc-800 text-zinc-300 border-zinc-700"
                               >
-                                {accInfo?.tag ?? inf.account_id}
+                                {accInfo?.name ?? inf.account_id}
                               </span>
                             </div>
                             <p className="text-xs text-zinc-500 mt-0.5">Crédito em conta</p>
