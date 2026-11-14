@@ -9,9 +9,15 @@ export class ApiError extends Error {
 
 export async function api<T>(path: string, opts: { method?: string; body?: unknown } = {}): Promise<T> {
   const hasBody = opts.body !== undefined;
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+  if (hasBody) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(`/api${path}`, {
     method: opts.method ?? 'GET',
-    headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
+    headers,
     body: hasBody ? JSON.stringify(opts.body) : undefined,
     credentials: 'same-origin',
   });
@@ -37,6 +43,23 @@ export type AdminUser = {
   is_active: number;
   is_admin: number;
   created_at: string;
+};
+
+export type SecurityAuditLog = {
+  id: number;
+  user_id: number | null;
+  username: string | null;
+  event_type: string;
+  ip_address: string;
+  user_agent: string;
+  details: string;
+  created_at: string;
+};
+
+export type AdminSecuritySummary = {
+  active_sessions_count: number;
+  active_blocks_count: number;
+  logs: SecurityAuditLog[];
 };
 
 export type Income = { id: number; name: string; amount_cents: number; sort_order: number };

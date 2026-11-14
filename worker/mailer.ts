@@ -1,4 +1,4 @@
-// Cliente SMTP nativo sobre TLS Socket (Cloudflare Workers connect())
+// Cliente SMTP nativo sobre TLS Socket (Cloudflare Workers connect()) com sanitização anti-SMTP Injection
 import { connect } from 'cloudflare:sockets';
 
 const enc = new TextEncoder();
@@ -11,6 +11,22 @@ function toBase64(str: string): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+/**
+ * Remove quebras de linha (CR/LF) e caracteres de controle para prevenir SMTP Command/Header Injection.
+ */
+function sanitizeSmtpHeader(val: string): string {
+  return val.replace(/[\r\n\0<>]/g, '').trim();
+}
+
+export function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export async function sendEmail({
@@ -26,6 +42,14 @@ export async function sendEmail({
   smtpUser: string;
   smtpPass: string;
 }) {
+  const safeTo = sanitizeSmtpHeader(to);
+  const safeUser = sanitizeSmtpHeader(smtpUser);
+  const safeSubject = subject.replace(/[\r\n\0]/g, '').trim();
+
+  if (!safeTo || !safeUser) {
+    throw new Error('Destinatário ou remetente SMTP inválido');
+  }
+
   // Conexão direta TLS na porta 465 (SMTPS)
   const socket = connect(
     {
@@ -76,7 +100,7 @@ export async function sendEmail({
     await writer.write(enc.encode(cmd + '\r\n'));
     const resp = await readResponse();
     if (expectedCode && !resp.startsWith(expectedCode)) {
-      const summary = cmd.length > 30 ? cmd.slice(0, 30) + '...' : cmd;
+      const summary = cmd.length > 20 ? cmd.slice(0, 20) + '...' : cmd;
       throw new Error(`SMTP Error [${summary}]: ${resp.trim()}`);
     }
     return resp;
@@ -91,12 +115,12 @@ export async function sendEmail({
 
     // 3. AUTH LOGIN
     await sendCommand('AUTH LOGIN', '334');
-    await sendCommand(toBase64(smtpUser), '334');
+    await sendCommand(toBase64(safeUser), '334');
     await sendCommand(toBase64(smtpPass), '235');
 
-    // 4. Remetente e Destinatário
-    await sendCommand(`MAIL FROM:<${smtpUser}>`, '250');
-    await sendCommand(`RCPT TO:<${to}>`, '250');
+    // 4. Remetente e Destinatário sanitizados
+    await sendCommand(`MAIL FROM:<${safeUser}>`, '250');
+    await sendCommand(`RCPT TO:<${safeTo}>`, '250');
 
     // 5. Envio do corpo do e-mail (DATA)
     await sendCommand('DATA', '354');
@@ -104,9 +128,9 @@ export async function sendEmail({
     const base64Body = toBase64(html).match(/.{1,76}/g)?.join('\r\n') || '';
 
     const emailBody = [
-      `From: "Capi Finance" <${smtpUser}>`,
-      `To: <${to}>`,
-      `Subject: =?UTF-8?B?${toBase64(subject)}?=`,
+      `From: "Capi Finance" <${safeUser}>`,
+      `To: <${safeTo}>`,
+      `Subject: =?UTF-8?B?${toBase64(safeSubject)}?=`,
       'MIME-Version: 1.0',
       'Content-Type: text/html; charset=UTF-8',
       'Content-Transfer-Encoding: base64',

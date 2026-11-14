@@ -1,36 +1,85 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { randomToken, sha256, verifyPassword, hashPassword } from './auth';
-import { sendEmail } from './mailer';
+import {
+  randomToken,
+  sha256,
+  verifyPassword,
+  hashPassword,
+  DUMMY_PASSWORD_HASH,
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  hashOtpCode,
+  verifyOtpCode,
+  encryptPayload,
+  decryptPayload,
+} from './auth';
+import { sendEmail, escapeHtml } from './mailer';
+import {
+  getClientIp,
+  getUserAgent,
+  checkInMemoryBurst,
+  checkRateLimit,
+  resetRateLimit,
+  logSecurityEvent,
+  applySecurityHeaders,
+  verifyCsrfAndOrigin,
+} from './security';
 
-type Env = { DB: D1Database; ASSETS: Fetcher; SMTP_USER?: string; SMTP_PASS?: string };
+type Env = {
+  DB: D1Database;
+  ASSETS: Fetcher;
+  SMTP_USER?: string;
+  SMTP_PASS?: string;
+  ENCRYPTION_SECRET?: string;
+};
 type Vars = { userId: number; username: string; sessionId: string; isAdmin: boolean };
 type AppEnv = { Bindings: Env; Variables: Vars };
 
 const SESSION_COOKIE = 'capi_session';
-const SESSION_DAYS = 30;
+const SESSION_DAYS = 14; // Expiração segura de 14 dias
+const MAX_PAYLOAD_BYTES = 32_768; // 32 KB máximo por requisição JSON (proteção contra DoS)
+const MAX_OTP_ATTEMPTS = 5;       // Máximo de 5 tentativas antes de destruir o código OTP
 
 const app = new Hono<AppEnv>().basePath('/api');
 
+function getEncryptionSecret(env: Env): string {
+  return env.ENCRYPTION_SECRET || env.SMTP_PASS || 'capi_finance_aes256_internal_key_v1';
+}
+
 // ---------- helpers ----------
-function bad(message: string, status: 400 | 401 | 403 | 404 | 409 = 400): never {
+function bad(message: string, status: 400 | 401 | 403 | 404 | 409 | 413 | 429 = 400): never {
   throw new HTTPException(status, { message });
 }
 
-async function body(c: { req: { json: () => Promise<unknown> } }) {
-  const data = await c.req.json().catch(() => null);
-  if (!data || typeof data !== 'object') bad('JSON inválido');
+async function body(c: { req: { text: () => Promise<string> } }) {
+  const raw = await c.req.text().catch(() => '');
+  if (!raw) bad('Corpo da requisição vazio');
+  if (raw.length > MAX_PAYLOAD_BYTES) bad('Payload excede o limite permitido (32 KB)', 413);
+  let data: unknown = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    bad('JSON inválido');
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) bad('JSON inválido');
   return data as Record<string, unknown>;
 }
 
 const str = (v: unknown, field: string, { required = true, max = 120 } = {}) => {
   if (v === undefined && !required) return undefined;
   if (typeof v !== 'string') return bad(`Campo "${field}" inválido`);
-  const s = v.trim();
+  // Remove caracteres de controle ASCII (prevenção de injeção de caracteres nulos/controle)
+  const s = v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
   if (required && !s) bad(`Campo "${field}" é obrigatório`);
-  if (s.length > max) bad(`Campo "${field}" muito longo`);
+  if (s.length > max) bad(`Campo "${field}" muito longo (máx ${max} caracteres)`);
   return s;
+};
+
+const validHexColor = (v: unknown, fallback = '#10b981'): string => {
+  if (typeof v !== 'string') return fallback;
+  const trimmed = v.trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : fallback;
 };
 
 const cents = (v: unknown, field: string, { required = true, min = 0 } = {}) => {
@@ -67,11 +116,39 @@ async function guardUnique<T>(fn: () => Promise<T>) {
 }
 
 app.onError((err, c) => {
+  applySecurityHeaders(c);
   if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
-  console.error(err);
-  return c.json({ error: 'Erro interno' }, 500);
+  console.error('[Internal Error]', err);
+  return c.json({ error: 'Erro interno no servidor' }, 500);
 });
-app.notFound((c) => c.json({ error: 'Rota não encontrada' }, 404));
+app.notFound((c) => {
+  applySecurityHeaders(c);
+  return c.json({ error: 'Rota não encontrada' }, 404);
+});
+
+// ============================================================================
+// MIDDLEWARE GLOBAL DE SEGURANÇA (Headers, Anti-DDoS Burst, Payload Size, CSRF)
+// ============================================================================
+app.use('*', async (c, next) => {
+  applySecurityHeaders(c);
+
+  const ip = getClientIp(c);
+  const isAuthRoute = c.req.path.startsWith('/api/auth/');
+
+  // 1. Proteção Anti-Flood / DDoS em memória (rejeita rajadas antes de tocar no banco)
+  checkInMemoryBurst(ip, isAuthRoute);
+
+  // 2. Validação do tamanho do payload pelo Content-Length
+  const contentLength = Number(c.req.header('Content-Length') || 0);
+  if (contentLength > MAX_PAYLOAD_BYTES) {
+    bad('Payload excede o limite de segurança permitido (32 KB)', 413);
+  }
+
+  // 3. Proteção CSRF e verificação estrita de Origin / Referer
+  verifyCsrfAndOrigin(c);
+
+  await next();
+});
 
 // ---------- auth ----------
 function generateOTP(): string {
@@ -79,8 +156,18 @@ function generateOTP(): string {
   return String(100000 + (arr[0] % 900000));
 }
 
+function validatePasswordStrength(password: string, fieldLabel = 'A senha') {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    bad(`${fieldLabel} deve ter no mínimo ${MIN_PASSWORD_LENGTH} caracteres`);
+  }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    bad(`${fieldLabel} não pode exceder ${MAX_PASSWORD_LENGTH} caracteres`);
+  }
+}
+
 // 1. Iniciar Cadastro: gera OTP e envia por e-mail
 app.post('/auth/signup/request', async (c) => {
+  const ip = getClientIp(c);
   const data = await body(c);
   const rawUsername = str(data.username, 'nome') || '';
   const username = rawUsername.trim().replace(/\s+/g, ' ');
@@ -99,12 +186,28 @@ app.post('/auth/signup/request', async (c) => {
   if (!email.includes('@') || !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
     bad('E-mail inválido. Informe um e-mail real com @ e domínio válido (ex: gmail.com, hotmail.com, outlook.com)');
   }
-  if (password.length < 6) {
-    bad('A senha deve ter no mínimo 6 caracteres');
-  }
+  validatePasswordStrength(password, 'A senha');
+
+  // Rate limiting: máximo 6 solicitações de cadastro por IP a cada 15 min, e máx 3 por e-mail
+  await checkRateLimit(c.env.DB, {
+    key: `signup_req_ip:${ip}`,
+    maxPoints: 6,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Muitas solicitações de cadastro deste IP. Aguarde 15 minutos.',
+  });
+  await checkRateLimit(c.env.DB, {
+    key: `signup_req_email:${email}`,
+    maxPoints: 3,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Muitos códigos solicitados para este e-mail. Aguarde alguns minutos.',
+  });
 
   // Verifica se username ou email já existem
-  const existing = await c.env.DB.prepare('SELECT username, email FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)')
+  const existing = await c.env.DB.prepare(
+    'SELECT username, email FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)',
+  )
     .bind(username, email)
     .first<{ username: string; email: string }>();
 
@@ -114,20 +217,26 @@ app.post('/auth/signup/request', async (c) => {
   }
 
   const code = generateOTP();
+  const codeHash = await hashOtpCode(email, 'signup', code);
   const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutos
   const passwordHash = await hashPassword(password);
-  const payload = JSON.stringify({ username, password_hash: passwordHash });
+  const rawPayload = JSON.stringify({ username, password_hash: passwordHash });
+  const encryptedPayload = await encryptPayload(rawPayload, getEncryptionSecret(c.env));
 
-  // Salva no banco
+  // Salva no banco (código com hash SHA-256 e payload criptografado com AES-256-GCM)
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ? AND type = "signup"').bind(email),
-    c.env.DB.prepare('INSERT INTO verification_codes (email, code, type, payload, expires_at) VALUES (?, ?, "signup", ?, ?)')
-      .bind(email, code, payload, expiresAt),
+    c.env.DB.prepare(
+      'INSERT INTO verification_codes (email, code, type, payload, expires_at, attempts) VALUES (?, ?, "signup", ?, ?, 0)',
+    ).bind(email, codeHash, encryptedPayload, expiresAt),
   ]);
+
+  await logSecurityEvent(c.env.DB, c, 'SIGNUP_OTP_SENT', `Solicitação de cadastro para ${email} (${username})`);
 
   // Enviar e-mail
   if (c.env.SMTP_USER && c.env.SMTP_PASS) {
     try {
+      const safeName = escapeHtml(username);
       await sendEmail({
         to: email,
         subject: `Seu código de confirmação: ${code}`,
@@ -135,12 +244,12 @@ app.post('/auth/signup/request', async (c) => {
         smtpPass: c.env.SMTP_PASS,
         html: `
           <div style="font-family: sans-serif; background-color: #000; color: #fff; padding: 30px; border-radius: 12px; max-width: 480px; margin: auto;">
-            <h2 style="color: #34d399; margin-top: 0;">Bem-vindo ao Capi Finance!</h2>
+            <h2 style="color: #34d399; margin-top: 0;">Bem-vindo ao Capi Finance, ${safeName}!</h2>
             <p>Seu código de verificação para ativar sua conta é:</p>
             <div style="background-color: #18181b; padding: 16px; border-radius: 8px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #34d399; margin: 24px 0;">
               ${code}
             </div>
-            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos. Se você não solicitou este cadastro, desconsidere esta mensagem.</p>
+            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos e possui proteção contra tentativas inválidas. Se você não solicitou este cadastro, desconsidere esta mensagem.</p>
           </div>
         `,
       });
@@ -156,40 +265,80 @@ app.post('/auth/signup/request', async (c) => {
 
 // 2. Confirmar Cadastro com o código OTP
 app.post('/auth/signup/confirm', async (c) => {
+  const ip = getClientIp(c);
   const data = await body(c);
   const email = str(data.email, 'e-mail')!.toLowerCase();
-  const code = str(data.code, 'código')!.trim();
+  const code = str(data.code, 'código', { max: 20 })!.trim();
+
+  await checkRateLimit(c.env.DB, {
+    key: `signup_confirm_ip:${ip}`,
+    maxPoints: 10,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+  });
 
   const record = await c.env.DB.prepare(
-    'SELECT payload FROM verification_codes WHERE email = ? AND code = ? AND type = "signup" AND expires_at > ?',
+    'SELECT id, code, payload, COALESCE(attempts, 0) AS attempts FROM verification_codes WHERE email = ? AND type = "signup" AND expires_at > ?',
   )
-    .bind(email, code, Date.now())
-    .first<{ payload: string }>();
+    .bind(email, Date.now())
+    .first<{ id: number; code: string; payload: string; attempts: number }>();
 
   if (!record) {
     bad('Código inválido ou expirado', 400);
   }
 
-  const { username, password_hash } = JSON.parse((record as { payload: string }).payload);
+  if (record.attempts >= MAX_OTP_ATTEMPTS) {
+    await c.env.DB.prepare('DELETE FROM verification_codes WHERE id = ?').bind(record.id).run();
+    await logSecurityEvent(c.env.DB, c, 'OTP_DESTROYED_BRUTEFORCE', `Código de signup destruído após ${MAX_OTP_ATTEMPTS} falhas (${email})`);
+    bad('Código invalidado por excesso de tentativas incorretas. Solicite um novo código.', 400);
+  }
+
+  const isCodeValid = await verifyOtpCode(email, 'signup', code, record.code);
+  if (!isCodeValid) {
+    const nextAttempts = record.attempts + 1;
+    if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+      await c.env.DB.prepare('DELETE FROM verification_codes WHERE id = ?').bind(record.id).run();
+      await logSecurityEvent(c.env.DB, c, 'OTP_DESTROYED_BRUTEFORCE', `Código de signup destruído após ${MAX_OTP_ATTEMPTS} falhas (${email})`);
+      bad('Código invalidado por excesso de tentativas incorretas. Solicite um novo código.', 400);
+    } else {
+      await c.env.DB.prepare('UPDATE verification_codes SET attempts = ? WHERE id = ?')
+        .bind(nextAttempts, record.id)
+        .run();
+      await logSecurityEvent(c.env.DB, c, 'OTP_FAILED', `Tentativa incorreta ${nextAttempts}/${MAX_OTP_ATTEMPTS} no signup (${email})`);
+      bad(`Código incorreto (${MAX_OTP_ATTEMPTS - nextAttempts} tentativa(s) restante(s))`, 400);
+    }
+  }
+
+  const decryptedJson = await decryptPayload(record.payload, getEncryptionSecret(c.env));
+  const { username, password_hash } = JSON.parse(decryptedJson) as { username: string; password_hash: string };
 
   // Insere o novo usuário ativo
-  const { id: newUserId } = (await c.env.DB.prepare(
-    'INSERT INTO users (username, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, 1, 0) RETURNING id',
-  )
-    .bind(username, email, password_hash)
-    .first<{ id: number }>())!;
+  const { id: newUserId } = (await guardUnique(() =>
+    c.env.DB.prepare(
+      'INSERT INTO users (username, email, password_hash, is_active, is_admin) VALUES (?, ?, ?, 1, 0) RETURNING id',
+    )
+      .bind(username, email, password_hash)
+      .first<{ id: number }>(),
+  ))!;
 
-  // Deleta o código de verificação
-  await c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email).run();
-
-  // Cria sessão e autentica direto
+  // Cria conta padrão inicial para o novo usuário e remove o código usado
   const token = randomToken();
   const expires = Date.now() + SESSION_DAYS * 86_400_000;
-  await c.env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').bind(
-    await sha256(token),
-    newUserId,
-    expires,
-  ).run();
+  const ua = getUserAgent(c);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email),
+    c.env.DB.prepare(
+      `INSERT OR IGNORE INTO user_accounts (user_id, slug, name, color, sort_order)
+       VALUES (?, 'nubank', 'NUBANK', '#820ad1', 1)`,
+    ).bind(newUserId),
+    c.env.DB.prepare(
+      `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    ).bind(await sha256(token), newUserId, expires, ip, ua),
+  ]);
+
+  await logSecurityEvent(c.env.DB, c, 'SIGNUP_SUCCESS', `Conta criada com sucesso: ${username} (${email})`, newUserId);
 
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
@@ -204,29 +353,55 @@ app.post('/auth/signup/confirm', async (c) => {
 
 // 3. Esqueci Minha Senha: pede envio de código
 app.post('/auth/password/request', async (c) => {
+  const ip = getClientIp(c);
   const data = await body(c);
   const email = str(data.email, 'e-mail')!.toLowerCase();
 
-  const user = await c.env.DB.prepare('SELECT id, username FROM users WHERE email = ? AND is_active = 1')
+  await checkRateLimit(c.env.DB, {
+    key: `pwd_req_ip:${ip}`,
+    maxPoints: 5,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Muitas solicitações de recuperação de senha. Aguarde 15 minutos.',
+  });
+  await checkRateLimit(c.env.DB, {
+    key: `pwd_req_email:${email}`,
+    maxPoints: 3,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Muitos códigos de recuperação solicitados para este e-mail. Aguarde alguns minutos.',
+  });
+
+  const user = await c.env.DB.prepare('SELECT id, username FROM users WHERE lower(email) = lower(?) AND is_active = 1')
     .bind(email)
     .first<{ id: number; username: string }>();
 
+  const uniformMessage = 'Se o e-mail estiver cadastrado e ativo, enviamos o código de recuperação.';
+
   if (!user) {
-    // Por segurança não revelamos se existe ou não, mas retornamos ok
-    return c.json({ ok: true, message: 'Se o e-mail estiver cadastrado, o código foi enviado.' });
+    // Executa derivação dummy para mitigar enumeração por tempo de resposta
+    await verifyPassword('dummy_timing_shield', DUMMY_PASSWORD_HASH);
+    await logSecurityEvent(c.env.DB, c, 'PASSWORD_RESET_UNKNOWN_EMAIL', `Solicitação de reset para e-mail não encontrado: ${email}`);
+    return c.json({ ok: true, message: uniformMessage });
   }
 
   const code = generateOTP();
+  const codeHash = await hashOtpCode(email, 'reset_password', code);
   const expiresAt = Date.now() + 15 * 60 * 1000;
+  const encryptedPayload = await encryptPayload(String(user.id), getEncryptionSecret(c.env));
 
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ? AND type = "reset_password"').bind(email),
-    c.env.DB.prepare('INSERT INTO verification_codes (email, code, type, payload, expires_at) VALUES (?, ?, "reset_password", ?, ?)')
-      .bind(email, code, String(user.id), expiresAt),
+    c.env.DB.prepare(
+      'INSERT INTO verification_codes (email, code, type, payload, expires_at, attempts) VALUES (?, ?, "reset_password", ?, ?, 0)',
+    ).bind(email, codeHash, encryptedPayload, expiresAt),
   ]);
+
+  await logSecurityEvent(c.env.DB, c, 'PASSWORD_RESET_OTP_SENT', `Código de recuperação enviado para ${email}`, user.id);
 
   if (c.env.SMTP_USER && c.env.SMTP_PASS) {
     try {
+      const safeName = escapeHtml(user.username);
       await sendEmail({
         to: email,
         subject: `Recuperação de Senha - Capi Finance: ${code}`,
@@ -235,12 +410,12 @@ app.post('/auth/password/request', async (c) => {
         html: `
           <div style="font-family: sans-serif; background-color: #000; color: #fff; padding: 30px; border-radius: 12px; max-width: 480px; margin: auto;">
             <h2 style="color: #34d399; margin-top: 0;">Recuperação de Senha</h2>
-            <p>Olá, <b>${user.username}</b>. Você solicitou a redefinição da sua senha.</p>
+            <p>Olá, <b>${safeName}</b>. Você solicitou a redefinição da sua senha.</p>
             <p>Use o código abaixo para cadastrar uma nova senha:</p>
             <div style="background-color: #18181b; padding: 16px; border-radius: 8px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #34d399; margin: 24px 0;">
               ${code}
             </div>
-            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos. Se não foi você, ignore.</p>
+            <p style="color: #a1a1aa; font-size: 13px;">O código é válido por 15 minutos e expira automaticamente se houver tentativas incorretas. Se não foi você, ignore.</p>
           </div>
         `,
       });
@@ -249,47 +424,101 @@ app.post('/auth/password/request', async (c) => {
     }
   }
 
-  return c.json({ ok: true, message: 'Código de recuperação enviado para o e-mail!' });
+  return c.json({ ok: true, message: uniformMessage });
 });
 
 // 4. Redefinir Senha com o código
 app.post('/auth/password/reset', async (c) => {
+  const ip = getClientIp(c);
   const data = await body(c);
   const email = str(data.email, 'e-mail')!.toLowerCase();
-  const code = str(data.code, 'código')!.trim();
+  const code = str(data.code, 'código', { max: 20 })!.trim();
   const newPassword = typeof data.new_password === 'string' ? data.new_password : '';
 
-  if (newPassword.length < 6) {
-    bad('A nova senha deve ter no mínimo 6 caracteres');
-  }
+  validatePasswordStrength(newPassword, 'A nova senha');
+
+  await checkRateLimit(c.env.DB, {
+    key: `pwd_reset_ip:${ip}`,
+    maxPoints: 10,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+  });
 
   const record = await c.env.DB.prepare(
-    'SELECT payload FROM verification_codes WHERE email = ? AND code = ? AND type = "reset_password" AND expires_at > ?',
+    'SELECT id, code, payload, COALESCE(attempts, 0) AS attempts FROM verification_codes WHERE email = ? AND type = "reset_password" AND expires_at > ?',
   )
-    .bind(email, code, Date.now())
-    .first<{ payload: string }>();
+    .bind(email, Date.now())
+    .first<{ id: number; code: string; payload: string; attempts: number }>();
 
   if (!record) {
     bad('Código de recuperação inválido ou expirado', 400);
   }
 
-  const userId = Number(record.payload);
+  if (record.attempts >= MAX_OTP_ATTEMPTS) {
+    await c.env.DB.prepare('DELETE FROM verification_codes WHERE id = ?').bind(record.id).run();
+    await logSecurityEvent(c.env.DB, c, 'OTP_DESTROYED_BRUTEFORCE', `Código de reset destruído após ${MAX_OTP_ATTEMPTS} falhas (${email})`);
+    bad('Código invalidado por excesso de tentativas incorretas. Solicite um novo código.', 400);
+  }
+
+  const isCodeValid = await verifyOtpCode(email, 'reset_password', code, record.code);
+  if (!isCodeValid) {
+    const nextAttempts = record.attempts + 1;
+    if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+      await c.env.DB.prepare('DELETE FROM verification_codes WHERE id = ?').bind(record.id).run();
+      await logSecurityEvent(c.env.DB, c, 'OTP_DESTROYED_BRUTEFORCE', `Código de reset destruído após ${MAX_OTP_ATTEMPTS} falhas (${email})`);
+      bad('Código invalidado por excesso de tentativas incorretas. Solicite um novo código.', 400);
+    } else {
+      await c.env.DB.prepare('UPDATE verification_codes SET attempts = ? WHERE id = ?')
+        .bind(nextAttempts, record.id)
+        .run();
+      await logSecurityEvent(c.env.DB, c, 'OTP_FAILED', `Tentativa incorreta ${nextAttempts}/${MAX_OTP_ATTEMPTS} no reset (${email})`);
+      bad(`Código incorreto (${MAX_OTP_ATTEMPTS - nextAttempts} tentativa(s) restante(s))`, 400);
+    }
+  }
+
+  const decryptedUserId = await decryptPayload(record.payload, getEncryptionSecret(c.env));
+  const userId = Number(decryptedUserId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    bad('Dados de recuperação inválidos', 400);
+  }
+
   const newHash = await hashPassword(newPassword);
 
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, userId),
-    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId), // desconecta outras sessões
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId), // desconecta todas as sessões ativas
     c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(email),
   ]);
+
+  await resetRateLimit(c.env.DB, `login_acct:${email}`);
+  await logSecurityEvent(c.env.DB, c, 'PASSWORD_RESET_SUCCESS', `Senha redefinida via OTP (${email})`, userId);
 
   return c.json({ ok: true, message: 'Senha atualizada com sucesso! Faça login.' });
 });
 
-// 5. Login
+// 5. Login com proteção Anti-Brute-Force e Anti-Timing Attack
 app.post('/auth/login', async (c) => {
+  const ip = getClientIp(c);
+  const ua = getUserAgent(c);
   const data = await body(c);
   const loginInput = str(data.username, 'usuário ou e-mail')!.toLowerCase();
   const password = typeof data.password === 'string' ? data.password : '';
+
+  // 1. Verifica bloqueio por IP (máx 12 tentativas em 15 min) e por Conta (máx 5 falhas em 15 min)
+  await checkRateLimit(c.env.DB, {
+    key: `login_ip:${ip}`,
+    maxPoints: 12,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Muitas tentativas de login a partir deste IP. Aguarde 15 minutos.',
+  });
+  await checkRateLimit(c.env.DB, {
+    key: `login_acct:${loginInput}`,
+    maxPoints: 5,
+    windowMs: 15 * 60_000,
+    blockDurationMs: 15 * 60_000,
+    errorMessage: 'Conta temporariamente protegida após 5 tentativas de senha incorretas. Aguarde 15 minutos ou redefina sua senha.',
+  });
 
   const user = await c.env.DB.prepare(
     'SELECT id, username, email, password_hash, is_active, is_admin FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)',
@@ -297,24 +526,44 @@ app.post('/auth/login', async (c) => {
     .bind(loginInput, loginInput)
     .first<{ id: number; username: string; email: string; password_hash: string; is_active: number; is_admin: number }>();
 
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
+  // Sempre executa o PBKDF2 mesmo que o usuário não exista (evita enumeração por Timing Side-Channel)
+  const targetHash = user ? user.password_hash : DUMMY_PASSWORD_HASH;
+  const passwordOk = await verifyPassword(password, targetHash);
+
+  if (!user || !passwordOk) {
+    await logSecurityEvent(c.env.DB, c, 'LOGIN_FAILED', `Credenciais inválidas para "${loginInput}"`, user?.id ?? null);
     return c.json({ error: 'Usuário ou senha inválidos' }, 401);
   }
 
   if (user.is_active === 0) {
+    await logSecurityEvent(c.env.DB, c, 'LOGIN_BLOCKED_USER', `Tentativa de login em conta bloqueada: ${user.username}`, user.id);
     return c.json({ error: 'Sua conta está bloqueada pelo administrador.' }, 403);
   }
 
+  // Login bem-sucedido: limpa contador de falhas desta conta
+  await resetRateLimit(c.env.DB, `login_acct:${loginInput}`);
+  if (user.email) await resetRateLimit(c.env.DB, `login_acct:${user.email.toLowerCase()}`);
+  await resetRateLimit(c.env.DB, `login_acct:${user.username.toLowerCase()}`);
+
   const token = randomToken();
+  const sessionHash = await sha256(token);
   const expires = Date.now() + SESSION_DAYS * 86_400_000;
+
   await c.env.DB.batch([
+    // Remove sessões expiradas e limita a no máximo 10 sessões simultâneas por usuário
     c.env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(Date.now()),
-    c.env.DB.prepare('INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)').bind(
-      await sha256(token),
-      user.id,
-      expires,
-    ),
+    c.env.DB.prepare(
+      `DELETE FROM sessions WHERE user_id = ? AND id NOT IN (
+         SELECT id FROM sessions WHERE user_id = ? ORDER BY expires_at DESC LIMIT 9
+       )`,
+    ).bind(user.id, user.id),
+    c.env.DB.prepare(
+      `INSERT INTO sessions (id, user_id, expires_at, ip_address, user_agent, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    ).bind(sessionHash, user.id, expires, ip, ua),
   ]);
+
+  await logSecurityEvent(c.env.DB, c, 'LOGIN_SUCCESS', `Login efetuado com sucesso (${user.username})`, user.id);
 
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
@@ -326,7 +575,7 @@ app.post('/auth/login', async (c) => {
   return c.json({ id: user.id, username: user.username, email: user.email, is_admin: user.is_admin === 1 });
 });
 
-// Middleware de autenticação
+// Middleware de autenticação para todas as rotas privadas
 app.use('*', async (c, next) => {
   if (
     c.req.path === '/api/auth/login' ||
@@ -339,7 +588,9 @@ app.use('*', async (c, next) => {
   }
 
   const token = getCookie(c, SESSION_COOKIE);
-  if (!token) return c.json({ error: 'Não autenticado' }, 401);
+  if (!token || token.length < 20 || token.length > 128) {
+    return c.json({ error: 'Não autenticado' }, 401);
+  }
   const sessionId = await sha256(token);
   const row = await c.env.DB.prepare(
     `SELECT u.id, u.username, u.is_active, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
@@ -348,7 +599,21 @@ app.use('*', async (c, next) => {
     .bind(sessionId, Date.now())
     .first<{ id: number; username: string; is_active: number; is_admin: number }>();
 
-  if (!row || row.is_active === 0) return c.json({ error: 'Sessão inválida ou conta bloqueada' }, 401);
+  if (!row || row.is_active === 0) {
+    deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+    return c.json({ error: 'Sessão inválida ou conta bloqueada' }, 401);
+  }
+
+  // Rate limit de escrita por usuário autenticado (evita abuso/automação de mutações)
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
+    await checkRateLimit(c.env.DB, {
+      key: `user_write:${row.id}`,
+      maxPoints: 90,
+      windowMs: 60_000,
+      blockDurationMs: 60_000,
+      errorMessage: 'Você enviou muitas alterações em menos de 1 minuto. Aguarde alguns instantes.',
+    });
+  }
 
   c.set('userId', row.id);
   c.set('username', row.username);
@@ -370,9 +635,49 @@ app.get('/auth/me', async (c) => {
 });
 
 app.post('/auth/logout', async (c) => {
-  await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(c.get('sessionId')).run();
-  deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
+  await c.env.DB.prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?')
+    .bind(c.get('sessionId'), c.get('userId'))
+    .run();
+  deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
   return c.json({ ok: true });
+});
+
+// Desconectar todas as sessões ativas do usuário (em todos os aparelhos)
+app.post('/auth/logout-all', async (c) => {
+  const uid = c.get('userId');
+  await c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(uid).run();
+  await logSecurityEvent(c.env.DB, c, 'LOGOUT_ALL_SESSIONS', 'Usuário encerrou todas as sessões ativas', uid);
+  deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+  return c.json({ ok: true });
+});
+
+// Alterar senha estando logado
+app.post('/auth/password/change', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const currentPassword = typeof data.current_password === 'string' ? data.current_password : '';
+  const newPassword = typeof data.new_password === 'string' ? data.new_password : '';
+
+  validatePasswordStrength(newPassword, 'A nova senha');
+
+  const user = await c.env.DB.prepare('SELECT password_hash FROM users WHERE id = ?')
+    .bind(uid)
+    .first<{ password_hash: string }>();
+
+  if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
+    await logSecurityEvent(c.env.DB, c, 'PASSWORD_CHANGE_FAILED', 'Senha atual incorreta ao tentar alterar senha', uid);
+    bad('A senha atual informada está incorreta', 401);
+  }
+
+  const newHash = await hashPassword(newPassword);
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, uid),
+    // Revoga todas as outras sessões exceto a atual
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').bind(uid, c.get('sessionId')),
+  ]);
+
+  await logSecurityEvent(c.env.DB, c, 'PASSWORD_CHANGED', 'Senha alterada pelo próprio usuário (outras sessões encerradas)', uid);
+  return c.json({ ok: true, message: 'Senha atualizada com sucesso!' });
 });
 
 // ---------- PAINEL EXCLUSIVO DE ADMIN (apenas edoardofama / is_admin = 1) ----------
@@ -384,14 +689,33 @@ app.get('/admin/users', async (c) => {
   return c.json(results);
 });
 
+app.get('/admin/security-logs', async (c) => {
+  if (!c.get('isAdmin')) bad('Acesso negado', 403);
+  const [logs, activeSessions, activeBlocks] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT l.id, l.user_id, u.username, l.event_type, l.ip_address, l.user_agent, l.details, l.created_at
+       FROM security_audit_logs l
+       LEFT JOIN users u ON u.id = l.user_id
+       ORDER BY l.id DESC LIMIT 80`,
+    ),
+    c.env.DB.prepare('SELECT COUNT(*) AS count FROM sessions WHERE expires_at > ?').bind(Date.now()),
+    c.env.DB.prepare('SELECT COUNT(*) AS count FROM rate_limits WHERE blocked_until > ?').bind(Date.now()),
+  ]);
+  return c.json({
+    active_sessions_count: Number((activeSessions.results[0] as { count: number })?.count ?? 0),
+    active_blocks_count: Number((activeBlocks.results[0] as { count: number })?.count ?? 0),
+    logs: logs.results,
+  });
+});
+
 app.post('/admin/users/:id/toggle-status', async (c) => {
   if (!c.get('isAdmin')) bad('Acesso negado', 403);
   const targetId = idParam(c.req.param('id'));
   if (targetId === c.get('userId')) bad('Você não pode bloquear sua própria conta de admin', 400);
 
-  const target = await c.env.DB.prepare('SELECT is_active FROM users WHERE id = ?')
+  const target = await c.env.DB.prepare('SELECT username, is_active FROM users WHERE id = ?')
     .bind(targetId)
-    .first<{ is_active: number }>();
+    .first<{ username: string; is_active: number }>();
   if (!target) bad('Usuário não encontrado', 404);
 
   const newStatus = target.is_active === 1 ? 0 : 1;
@@ -399,6 +723,14 @@ app.post('/admin/users/:id/toggle-status', async (c) => {
     c.env.DB.prepare('UPDATE users SET is_active = ? WHERE id = ?').bind(newStatus, targetId),
     ...(newStatus === 0 ? [c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId)] : []),
   ]);
+
+  await logSecurityEvent(
+    c.env.DB,
+    c,
+    newStatus === 0 ? 'ADMIN_USER_BLOCKED' : 'ADMIN_USER_UNBLOCKED',
+    `Admin alterou status do usuário "${target.username}" (#${targetId}) para ${newStatus === 1 ? 'Ativo' : 'Bloqueado'}`,
+    c.get('userId'),
+  );
 
   return c.json({ id: targetId, is_active: newStatus });
 });
@@ -408,7 +740,37 @@ app.delete('/admin/users/:id', async (c) => {
   const targetId = idParam(c.req.param('id'));
   if (targetId === c.get('userId')) bad('Você não pode excluir sua própria conta de admin', 400);
 
-  await c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(targetId).run();
+  const target = await c.env.DB.prepare('SELECT username, email FROM users WHERE id = ?')
+    .bind(targetId)
+    .first<{ username: string; email: string | null }>();
+  if (!target) bad('Usuário não encontrado', 404);
+
+  // Exclusão em cascata atômica de todos os registros pertencentes ao usuário
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM expenses WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM inflows WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM account_balances WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM credit_card_invoices WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM investment_snapshots WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM investment_accounts WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM incomes WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM categories WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM user_accounts WHERE user_id = ?').bind(targetId),
+    ...(target.email
+      ? [c.env.DB.prepare('DELETE FROM verification_codes WHERE email = ?').bind(target.email.toLowerCase())]
+      : []),
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(targetId),
+  ]);
+
+  await logSecurityEvent(
+    c.env.DB,
+    c,
+    'ADMIN_USER_DELETED',
+    `Admin excluiu permanentemente o usuário "${target.username}" (#${targetId})`,
+    c.get('userId'),
+  );
+
   return c.json({ ok: true });
 });
 
@@ -530,7 +892,7 @@ type AccountId = string;
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
   e.title, e.description, e.spent_on, e.payment_method, COALESCE(e.account_id, 'nubank') AS account_id,
   e.installment_current, e.installment_total,
-  e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id`;
+  e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id AND c.user_id = e.user_id`;
 
 function addMonthsToDate(isoDate: string, monthsToAdd: number): string {
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -560,7 +922,23 @@ async function assertCategory(c: { env: Env }, categoryId: number, userId: numbe
   const cat = await c.env.DB.prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?')
     .bind(categoryId, userId)
     .first();
-  if (!cat) bad('Categoria inválida');
+  if (!cat) bad('Categoria inválida ou não pertence à sua conta', 403);
+}
+
+async function resolveUserAccountSlug(c: { env: Env }, rawSlug: unknown, userId: number): Promise<string> {
+  if (typeof rawSlug === 'string' && rawSlug.trim()) {
+    const clean = rawSlug.trim().slice(0, 60);
+    const owned = await c.env.DB.prepare('SELECT slug FROM user_accounts WHERE user_id = ? AND slug = ?')
+      .bind(userId, clean)
+      .first<{ slug: string }>();
+    if (owned) return owned.slug;
+  }
+  const firstAcc = await c.env.DB.prepare(
+    'SELECT slug FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1',
+  )
+    .bind(userId)
+    .first<{ slug: string }>();
+  return firstAcc?.slug ?? 'nubank';
 }
 
 app.post('/expenses', async (c) => {
@@ -574,14 +952,8 @@ app.post('/expenses', async (c) => {
   if (!isDate(spentOn)) bad('Data inválida');
   await assertCategory(c, categoryId, uid);
 
-  // Conta de pagamento e forma
-  let accountId = typeof data.account_id === 'string' && data.account_id.trim() ? data.account_id.trim() : '';
-  if (!accountId) {
-    const firstAcc = await c.env.DB.prepare('SELECT slug FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1')
-      .bind(uid)
-      .first<{ slug: string }>();
-    accountId = firstAcc?.slug ?? 'padrao';
-  }
+  // Conta de pagamento validada contra as contas do próprio usuário
+  const accountId = await resolveUserAccountSlug(c, data.account_id, uid);
 
   const rawMethod = typeof data.payment_method === 'string' ? data.payment_method : 'debit';
   const paymentMethod = ['debit', 'pix', 'credit', 'voucher'].includes(rawMethod) ? rawMethod : 'debit';
@@ -598,7 +970,7 @@ app.post('/expenses', async (c) => {
     )
       .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod, accountId)
       .first<{ id: number }>())!;
-    const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
+    const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ? AND e.user_id = ?`).bind(id, uid).first();
     return c.json(row, 201);
   }
 
@@ -622,9 +994,9 @@ app.post('/expenses', async (c) => {
   await c.env.DB.batch(statements);
 
   const firstRow = await c.env.DB.prepare(
-    `${EXPENSE_SELECT} WHERE e.installment_group_id = ? AND e.installment_current = 1`,
+    `${EXPENSE_SELECT} WHERE e.installment_group_id = ? AND e.installment_current = 1 AND e.user_id = ?`,
   )
-    .bind(groupId)
+    .bind(groupId, uid)
     .first();
   return c.json(firstRow, 201);
 });
@@ -642,9 +1014,10 @@ app.put('/expenses/:id', async (c) => {
   if (spentOn !== undefined && !isDate(spentOn)) bad('Data inválida');
   if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
 
-  const rawAccount = typeof data.account_id === 'string' && data.account_id.trim()
-    ? data.account_id.trim()
-    : null;
+  let rawAccount: string | null = null;
+  if (typeof data.account_id === 'string' && data.account_id.trim()) {
+    rawAccount = await resolveUserAccountSlug(c, data.account_id, uid);
+  }
   const rawMethod = typeof data.payment_method === 'string' && ['debit', 'pix', 'credit', 'voucher'].includes(data.payment_method)
     ? data.payment_method
     : null;
@@ -675,7 +1048,7 @@ app.put('/expenses/:id', async (c) => {
     .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, rawAccount, rawMethod, id, uid)
     .first();
   if (!updated) bad('Lançamento não encontrado', 404);
-  const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ?`).bind(id).first();
+  const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ? AND e.user_id = ?`).bind(id, uid).first();
   return c.json(row);
 });
 
@@ -722,37 +1095,21 @@ app.post('/inflows', async (c) => {
   const receivedOn = str(data.received_on, 'data')!;
   if (!isDate(receivedOn)) bad('Data inválida');
 
-  let accountId = typeof data.account_id === 'string' && data.account_id.trim() ? data.account_id.trim() : '';
-  if (!accountId) {
-    const firstAcc = await c.env.DB.prepare('SELECT slug FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1')
-      .bind(uid)
-      .first<{ slug: string }>();
-    accountId = firstAcc?.slug ?? 'padrao';
-  }
-
+  const accountId = await resolveUserAccountSlug(c, data.account_id, uid);
   const month = receivedOn.slice(0, 7);
 
-  // 1. Inserir em inflows
-  const { id } = (await c.env.DB.prepare(
-    `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
-     VALUES (?, ?, ?, ?, ?) RETURNING id`,
-  )
-    .bind(uid, accountId, amount, description, receivedOn)
-    .first<{ id: number }>())!;
-
-  // 2. Atualizar saldo da conta correspondente (account_balances)
+  // Verifica saldo existente da conta antes de executar transação em lote
   const existing = await c.env.DB.prepare(
     `SELECT id, initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? AND month = ?`,
   )
     .bind(uid, accountId, month)
     .first<{ id: number; initial_cents: number }>();
 
+  let balanceStmt: D1PreparedStatement;
   if (existing) {
-    await c.env.DB.prepare(
-      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ?`,
-    )
-      .bind(amount, existing.id)
-      .run();
+    balanceStmt = c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+    ).bind(amount, existing.id, uid);
   } else {
     const prev = await c.env.DB.prepare(
       `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? ORDER BY updated_at DESC LIMIT 1`,
@@ -761,20 +1118,21 @@ app.post('/inflows', async (c) => {
       .first<{ initial_cents: number }>();
 
     const base = (prev?.initial_cents ?? 0) + amount;
-    await c.env.DB.prepare(
+    balanceStmt = c.env.DB.prepare(
       `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
        VALUES (?, ?, ?, ?, datetime('now'))`,
-    )
-      .bind(uid, month, accountId, base)
-      .run();
+    ).bind(uid, month, accountId, base);
   }
 
-  const row = await c.env.DB.prepare(
-    'SELECT id, account_id, amount_cents, description, received_on, created_at FROM inflows WHERE id = ?',
-  )
-    .bind(id)
-    .first();
-  return c.json(row, 201);
+  const [inflowRes] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+       VALUES (?, ?, ?, ?, ?) RETURNING id, account_id, amount_cents, description, received_on, created_at`,
+    ).bind(uid, accountId, amount, description, receivedOn),
+    balanceStmt,
+  ]);
+
+  return c.json(inflowRes.results[0], 201);
 });
 
 app.delete('/inflows/:id', async (c) => {
@@ -789,14 +1147,13 @@ app.delete('/inflows/:id', async (c) => {
 
   if (inflow) {
     const month = inflow.received_on.slice(0, 7);
-    await c.env.DB.prepare(
-      `UPDATE account_balances SET initial_cents = MAX(0, initial_cents - ?), updated_at = datetime('now')
-       WHERE user_id = ? AND account_id = ? AND month = ?`,
-    )
-      .bind(inflow.amount_cents, uid, inflow.account_id, month)
-      .run();
-
-    await c.env.DB.prepare('DELETE FROM inflows WHERE id = ? AND user_id = ?').bind(id, uid).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE account_balances SET initial_cents = MAX(0, initial_cents - ?), updated_at = datetime('now')
+         WHERE user_id = ? AND account_id = ? AND month = ?`,
+      ).bind(inflow.amount_cents, uid, inflow.account_id, month),
+      c.env.DB.prepare('DELETE FROM inflows WHERE id = ? AND user_id = ?').bind(id, uid),
+    ]);
   }
   return c.json({ ok: true });
 });
@@ -812,7 +1169,7 @@ app.get('/dashboard', async (c) => {
       `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order, COALESCE(c.is_fixed, 1) AS is_fixed,
               COALESCE(SUM(e.amount_cents), 0) AS spent_cents, COUNT(e.id) AS count
        FROM categories c
-       LEFT JOIN expenses e ON e.category_id = c.id AND e.spent_on >= ? AND e.spent_on < ?
+       LEFT JOIN expenses e ON e.category_id = c.id AND e.user_id = c.user_id AND e.spent_on >= ? AND e.spent_on < ?
        WHERE c.user_id = ?
        GROUP BY c.id ORDER BY c.is_fixed DESC, c.sort_order, c.id`,
     ).bind(start, end, uid),
@@ -1049,7 +1406,7 @@ app.post('/accounts', async (c) => {
   const uid = c.get('userId');
   const data = await body(c);
   const name = str(data.name, 'nome')!.toUpperCase();
-  const color = str(data.color ?? '#10b981', 'cor', { required: false, max: 20 }) ?? '#10b981';
+  const color = validHexColor(data.color, '#10b981');
 
   let baseSlug = name
     .toLowerCase()
@@ -1084,14 +1441,14 @@ app.post('/accounts', async (c) => {
   if (!row) bad('Erro ao criar conta');
 
   // Se passou initial_cents e month, já define o saldo inicial diretamente
-  if (typeof data.initial_cents === 'number' && data.initial_cents > 0 && typeof data.month === 'string') {
+  if (typeof data.initial_cents === 'number' && data.initial_cents > 0 && typeof data.month === 'string' && /^\d{4}-\d{2}$/.test(data.month)) {
     await c.env.DB.prepare(
       `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
        VALUES (?, ?, ?, ?, datetime('now'))
        ON CONFLICT(user_id, month, account_id)
        DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
     )
-      .bind(uid, data.month, row.slug, data.initial_cents)
+      .bind(uid, data.month, row.slug, cents(data.initial_cents, 'saldo inicial')!)
       .run();
   }
 
@@ -1105,8 +1462,19 @@ app.put('/accounts/balance', async (c) => {
   const data = await body(c);
   const month = str(data.month, 'mês')!;
   if (!/^\d{4}-\d{2}$/.test(month)) bad('Mês inválido');
-  const accountId = str(data.account_id, 'conta')!;
+  const rawAccountId = str(data.account_id, 'conta', { max: 60 })!;
   const initialCents = cents(data.initial_cents, 'saldo em conta')!;
+
+  // Verifica se a conta pertence ao usuário antes de permitir alteração de saldo
+  const ownedAccount = await c.env.DB.prepare(
+    'SELECT slug FROM user_accounts WHERE user_id = ? AND slug = ?',
+  )
+    .bind(uid, rawAccountId)
+    .first<{ slug: string }>();
+
+  if (!ownedAccount) {
+    bad('Conta não encontrada ou não pertence ao seu usuário', 403);
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
@@ -1114,10 +1482,10 @@ app.put('/accounts/balance', async (c) => {
      ON CONFLICT(user_id, month, account_id)
      DO UPDATE SET initial_cents = excluded.initial_cents, updated_at = datetime('now')`,
   )
-    .bind(uid, month, accountId, initialCents)
+    .bind(uid, month, ownedAccount.slug, initialCents)
     .run();
 
-  return c.json({ ok: true, account_id: accountId, month, initial_cents: initialCents });
+  return c.json({ ok: true, account_id: ownedAccount.slug, month, initial_cents: initialCents });
 });
 
 app.put('/accounts/:id', async (c) => {
@@ -1125,14 +1493,14 @@ app.put('/accounts/:id', async (c) => {
   const id = idParam(c.req.param('id'));
   const data = await body(c);
   const name = str(data.name, 'nome', { required: false })?.toUpperCase();
-  const color = str(data.color, 'cor', { required: false, max: 20 });
+  const color = data.color !== undefined ? validHexColor(data.color) : null;
 
   const row = await c.env.DB.prepare(
     `UPDATE user_accounts SET name = COALESCE(?, name), color = COALESCE(?, color)
      WHERE id = ? AND user_id = ?
      RETURNING id, slug, name, color, sort_order`,
   )
-    .bind(name ?? null, color ?? null, id, uid)
+    .bind(name ?? null, color, id, uid)
     .first();
 
   if (!row) bad('Conta não encontrada', 404);
@@ -1149,15 +1517,11 @@ app.delete('/accounts/:id', async (c) => {
 
   if (!acc) bad('Conta não encontrada', 404);
 
-  // Remove saldos da conta
-  await c.env.DB.prepare('DELETE FROM account_balances WHERE user_id = ? AND account_id = ?')
-    .bind(uid, acc.slug)
-    .run();
-
-  // Remove a conta
-  await c.env.DB.prepare('DELETE FROM user_accounts WHERE id = ? AND user_id = ?')
-    .bind(id, uid)
-    .run();
+  // Remove saldos e conta em lote atômico
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM account_balances WHERE user_id = ? AND account_id = ?').bind(uid, acc.slug),
+    c.env.DB.prepare('DELETE FROM user_accounts WHERE id = ? AND user_id = ?').bind(id, uid),
+  ]);
 
   return c.json({ ok: true });
 });
@@ -1193,10 +1557,21 @@ app.post('/investments/snapshot', async (c) => {
   const month = str(data.month, 'mês')!;
   if (!/^\d{4}-\d{2}$/.test(month)) bad('Formato de mês inválido (use YYYY-MM)');
 
+  // PROTEÇÃO ANTI-IDOR: verifica se a corretora pertence ao usuário logado
+  const ownedInvAccount = await c.env.DB.prepare(
+    'SELECT id FROM investment_accounts WHERE id = ? AND user_id = ?',
+  )
+    .bind(accountId, uid)
+    .first<{ id: number }>();
+
+  if (!ownedInvAccount) {
+    bad('Corretora de investimento não encontrada ou não pertence à sua conta', 403);
+  }
+
   const balance = cents(data.balance_cents, 'saldo')!;
   let delta: number;
 
-  if (typeof data.delta_cents === 'number' && Number.isInteger(data.delta_cents)) {
+  if (typeof data.delta_cents === 'number' && Number.isInteger(data.delta_cents) && Math.abs(data.delta_cents) <= 1_000_000_000) {
     delta = data.delta_cents;
   } else {
     // Auto-calcula variação com base no snapshot do mês anterior mais recente
@@ -1273,8 +1648,6 @@ app.post('/investments/redeem', async (c) => {
       .bind(uid, accountId, requestedMonth)
       .first<{ month: string; balance_cents: number; delta_cents: number }>();
 
-    // Se o mês requisitado tiver saldo suficiente para o resgate, usa ele;
-    // caso contrário, mantém latestSnap (onde o saldo mais recente foi verificado)
     if (specifiedSnap && specifiedSnap.balance_cents >= amount) {
       snapToUpdate = specifiedSnap;
     }
@@ -1293,42 +1666,8 @@ app.post('/investments/redeem', async (c) => {
   const newDelta = snapToUpdate.delta_cents - amount;
   const targetMonth = snapToUpdate.month;
 
-  // 3. Atualiza o snapshot da corretora abatendo o valor
-  await c.env.DB.prepare(
-    `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(user_id, account_id, month) DO UPDATE SET
-       balance_cents = excluded.balance_cents,
-       delta_cents = excluded.delta_cents`,
-  )
-    .bind(uid, accountId, targetMonth, newBalance, newDelta)
-    .run();
-
-  // 4. Determina a conta de destino para crédito do resgate
-  let destAccountId = typeof data.destination_account_id === 'string' && data.destination_account_id.trim()
-    ? data.destination_account_id.trim()
-    : 'nubank';
-
-  const destAcc = await c.env.DB.prepare(
-    'SELECT slug, name FROM user_accounts WHERE user_id = ? AND slug = ?',
-  )
-    .bind(uid, destAccountId)
-    .first<{ slug: string; name: string }>();
-
-  if (!destAcc) {
-    const fallbackAcc = await c.env.DB.prepare(
-      'SELECT slug, name FROM user_accounts WHERE user_id = ? ORDER BY sort_order, id LIMIT 1',
-    )
-      .bind(uid)
-      .first<{ slug: string; name: string }>();
-    if (fallbackAcc) {
-      destAccountId = fallbackAcc.slug;
-    } else {
-      bad('Nenhuma conta de destino encontrada para receber o resgate', 400);
-    }
-  }
-
-  // O crédito deve ir para o mês da data da transação do resgate
+  // 3. Determina e valida a conta de destino do usuário
+  const destAccountId = await resolveUserAccountSlug(c, data.destination_account_id ?? 'nubank', uid);
   const destMonth = dateParam.slice(0, 7);
 
   const destBal = await c.env.DB.prepare(
@@ -1338,12 +1677,11 @@ app.post('/investments/redeem', async (c) => {
     .bind(uid, destAccountId, destMonth)
     .first<{ id: number; initial_cents: number }>();
 
+  let destBalanceStmt: D1PreparedStatement;
   if (destBal) {
-    await c.env.DB.prepare(
-      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ?`,
-    )
-      .bind(amount, destBal.id)
-      .run();
+    destBalanceStmt = c.env.DB.prepare(
+      `UPDATE account_balances SET initial_cents = initial_cents + ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+    ).bind(amount, destBal.id, uid);
   } else {
     const prevDest = await c.env.DB.prepare(
       `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = ? ORDER BY updated_at DESC LIMIT 1`,
@@ -1352,21 +1690,27 @@ app.post('/investments/redeem', async (c) => {
       .first<{ initial_cents: number }>();
 
     const baseBal = (prevDest?.initial_cents ?? 0) + amount;
-    await c.env.DB.prepare(
+    destBalanceStmt = c.env.DB.prepare(
       `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
        VALUES (?, ?, ?, ?, datetime('now'))`,
-    )
-      .bind(uid, destMonth, destAccountId, baseBal)
-      .run();
+    ).bind(uid, destMonth, destAccountId, baseBal);
   }
 
-  // 5. Registra a entrada em inflows para a conta de destino
-  await c.env.DB.prepare(
-    `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
-     VALUES (?, ?, ?, ?, ?)`,
-  )
-    .bind(uid, destAccountId, amount, `Resgate Investimento - ${invAccount.name}`, dateParam)
-    .run();
+  // 4. Executa abate da corretora + crédito na conta + registro de entrada em LOTE ATÔMICO
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO investment_snapshots (user_id, account_id, month, balance_cents, delta_cents)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, account_id, month) DO UPDATE SET
+         balance_cents = excluded.balance_cents,
+         delta_cents = excluded.delta_cents`,
+    ).bind(uid, accountId, targetMonth, newBalance, newDelta),
+    destBalanceStmt,
+    c.env.DB.prepare(
+      `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).bind(uid, destAccountId, amount, `Resgate Investimento - ${invAccount.name}`, dateParam),
+  ]);
 
   return c.json({
     ok: true,
@@ -1383,7 +1727,7 @@ app.post('/investments/accounts', async (c) => {
   const data = await body(c);
   const uid = c.get('userId');
   const name = str(data.name, 'nome')!.toUpperCase();
-  const color = str(data.color ?? '#10b981', 'cor', { required: false, max: 20 }) ?? '#10b981';
+  const color = validHexColor(data.color, '#10b981');
 
   const row = await guardUnique(() =>
     c.env.DB.prepare(
@@ -1403,14 +1747,14 @@ app.put('/investments/accounts/:id', async (c) => {
   const id = idParam(c.req.param('id'));
   const data = await body(c);
   const name = str(data.name, 'nome', { required: false })?.toUpperCase();
-  const color = str(data.color, 'cor', { required: false, max: 20 });
+  const color = data.color !== undefined ? validHexColor(data.color) : null;
 
   const row = await c.env.DB.prepare(
     `UPDATE investment_accounts SET name = COALESCE(?, name), color = COALESCE(?, color)
      WHERE id = ? AND user_id = ?
      RETURNING id, name, color, sort_order`,
   )
-    .bind(name ?? null, color ?? null, id, uid)
+    .bind(name ?? null, color, id, uid)
     .first();
 
   if (!row) bad('Corretora não encontrada', 404);
@@ -1427,15 +1771,11 @@ app.delete('/investments/accounts/:id', async (c) => {
 
   if (!acc) bad('Corretora não encontrada', 404);
 
-  // Remove snapshots dessa corretora
-  await c.env.DB.prepare('DELETE FROM investment_snapshots WHERE account_id = ? AND user_id = ?')
-    .bind(id, uid)
-    .run();
-
-  // Remove a corretora
-  await c.env.DB.prepare('DELETE FROM investment_accounts WHERE id = ? AND user_id = ?')
-    .bind(id, uid)
-    .run();
+  // Remove snapshots e corretora em lote atômico
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM investment_snapshots WHERE account_id = ? AND user_id = ?').bind(id, uid),
+    c.env.DB.prepare('DELETE FROM investment_accounts WHERE id = ? AND user_id = ?').bind(id, uid),
+  ]);
 
   return c.json({ ok: true });
 });
@@ -1451,7 +1791,7 @@ app.get('/export', async (c) => {
       `SELECT e.spent_on, e.title, e.description, c.name AS category, e.amount_cents, e.payment_method,
               COALESCE(e.account_id, 'nubank') AS account_id,
               e.installment_current, e.installment_total
-       FROM expenses e JOIN categories c ON c.id = e.category_id
+       FROM expenses e JOIN categories c ON c.id = e.category_id AND c.user_id = e.user_id
        WHERE e.user_id = ? ORDER BY e.spent_on, e.id`,
     ).bind(uid),
     db.prepare('SELECT account_id, amount_cents, description, received_on FROM inflows WHERE user_id = ? ORDER BY received_on, id').bind(uid),
@@ -1572,7 +1912,7 @@ app.post('/credit-card/pay', async (c) => {
   const newTotalPaid = currentPaid + payCents;
   const isPaid = newTotalPaid >= totalCents ? 1 : 0;
 
-  // Abater do saldo da conta Nubank
+  // Abater do saldo da conta Nubank e atualizar fatura de forma atômica
   const nubankBalance = await c.env.DB.prepare(
     `SELECT id, month, initial_cents FROM account_balances
      WHERE user_id = ? AND account_id = 'nubank'
@@ -1581,30 +1921,24 @@ app.post('/credit-card/pay', async (c) => {
     .bind(uid, month)
     .first<{ id: number; month: string; initial_cents: number }>();
 
-  if (nubankBalance) {
-    const newBalance = Math.max(0, nubankBalance.initial_cents - payCents);
-    await c.env.DB.prepare(
-      `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
-    )
-      .bind(newBalance, nubankBalance.id)
-      .run();
-  } else {
-    await c.env.DB.prepare(
-      `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
-       VALUES (?, ?, 'nubank', 0, datetime('now'))`,
-    )
-      .bind(uid, month)
-      .run();
-  }
+  const balanceStmt = nubankBalance
+    ? c.env.DB.prepare(
+        `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+      ).bind(Math.max(0, nubankBalance.initial_cents - payCents), nubankBalance.id, uid)
+    : c.env.DB.prepare(
+        `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+         VALUES (?, ?, 'nubank', 0, datetime('now'))`,
+      ).bind(uid, month);
 
-  await c.env.DB.prepare(
-    `INSERT INTO credit_card_invoices (user_id, month, is_paid, paid_at, paid_amount_cents)
-     VALUES (?, ?, ?, datetime('now'), ?)
-     ON CONFLICT(user_id, month)
-     DO UPDATE SET is_paid = excluded.is_paid, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
-  )
-    .bind(uid, month, isPaid, newTotalPaid)
-    .run();
+  await c.env.DB.batch([
+    balanceStmt,
+    c.env.DB.prepare(
+      `INSERT INTO credit_card_invoices (user_id, month, is_paid, paid_at, paid_amount_cents)
+       VALUES (?, ?, ?, datetime('now'), ?)
+       ON CONFLICT(user_id, month)
+       DO UPDATE SET is_paid = excluded.is_paid, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
+    ).bind(uid, month, isPaid, newTotalPaid),
+  ]);
 
   return c.json({
     ok: true,
@@ -1642,20 +1976,23 @@ app.post('/credit-card/reopen', async (c) => {
     .bind(uid, month)
     .first<{ id: number; initial_cents: number }>();
 
+  const stmts: D1PreparedStatement[] = [];
   if (nubankBalance) {
     const restored = nubankBalance.initial_cents + paidAmount;
-    await c.env.DB.prepare(
-      `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
-    )
-      .bind(restored, nubankBalance.id)
-      .run();
+    stmts.push(
+      c.env.DB.prepare(
+        `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+      ).bind(restored, nubankBalance.id, uid),
+    );
   }
 
-  await c.env.DB.prepare(
-    `UPDATE credit_card_invoices SET is_paid = 0, paid_at = NULL, paid_amount_cents = 0 WHERE user_id = ? AND month = ?`,
-  )
-    .bind(uid, month)
-    .run();
+  stmts.push(
+    c.env.DB.prepare(
+      `UPDATE credit_card_invoices SET is_paid = 0, paid_at = NULL, paid_amount_cents = 0 WHERE user_id = ? AND month = ?`,
+    ).bind(uid, month),
+  );
+
+  await c.env.DB.batch(stmts);
 
   return c.json({ ok: true, month, restored_cents: paidAmount });
 });
