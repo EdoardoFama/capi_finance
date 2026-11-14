@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { api, type Category, type Expense, type AccountId, type PaymentMethod, ACCOUNT_DEFINITIONS } from '../api';
 import { formatBRL, formatCurrencyInput, parseBRL } from '../format';
 import { useToast } from '../context';
+import { CustomSelect } from './ui';
 
 type Props = {
   expense: Expense | null;
@@ -155,17 +156,15 @@ function EditExpenseForm({
             <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">
               Categoria
             </label>
-            <select
-              value={categoryId}
-              onChange={(e) => setCategoryId(Number(e.target.value))}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <CustomSelect
+              value={String(categoryId)}
+              onChange={(val) => setCategoryId(Number(val))}
+              options={categories.map((c) => ({
+                value: String(c.id),
+                label: c.name,
+              }))}
+              searchPlaceholder="Pesquisar categoria..."
+            />
           </div>
 
           {/* Conta de Pagamento */}

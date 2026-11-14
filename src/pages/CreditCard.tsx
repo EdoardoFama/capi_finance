@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type Category, type CreditCardInvoice, type Expense } from '../api';
-import { useMonth, useToast } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
 import { centsToInput, dayLabel, formatBRL, formatCurrencyInput, monthLabel, parseBRL } from '../format';
 import {
   Card,
   CollapseButton,
+  CustomSelect,
   IconCreditCard,
   IconEdit,
   IconPlus,
@@ -22,6 +23,8 @@ import DistributionChart from '../components/DistributionChart';
 export default function CreditCard() {
   const { month } = useMonth();
   const toast = useToast();
+  const confirm = useConfirm();
+  const confirmChoice = useConfirmChoice();
 
   const [invoice, setInvoice] = useState<CreditCardInvoice | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -59,11 +62,16 @@ export default function CreditCard() {
 
   async function remove(exp: Expense) {
     if (exp.installment_total > 1 && exp.installment_group_id) {
-      const deleteAll = confirm(
-        `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
-          `Deseja excluir TODAS as ${exp.installment_total} parcelas?\n\n` +
-          `[OK] = Excluir todas as parcelas\n[Cancelar] = Excluir apenas esta parcela`,
-      );
+      const choice = await confirmChoice({
+        title: 'Excluir Gasto Parcelado',
+        message: `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}) no valor de ${formatBRL(exp.amount_cents)}.\n\nComo você deseja excluir?`,
+        confirmText: 'Excluir todas as parcelas',
+        secondaryText: 'Apenas esta parcela',
+        cancelText: 'Cancelar',
+        variant: 'danger',
+      });
+      if (!choice) return;
+      const deleteAll = choice === 'confirm';
       try {
         await api(`/expenses/${exp.id}?all_installments=${deleteAll}`, { method: 'DELETE' });
         toast(deleteAll ? 'Todas as parcelas foram excluídas' : 'Parcela excluída');
@@ -74,10 +82,18 @@ export default function CreditCard() {
       return;
     }
 
-    if (!confirm(`Deseja excluir o gasto de ${formatBRL(exp.amount_cents)} (${exp.title})?`)) return;
+    const ok = await confirm({
+      title: 'Excluir Gasto do Cartão',
+      message: `Deseja realmente excluir o lançamento de ${formatBRL(exp.amount_cents)} (${exp.title || exp.category_name})?`,
+      confirmText: 'Excluir Lançamento',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
     try {
       await api(`/expenses/${exp.id}`, { method: 'DELETE' });
-      toast('Lançamento excluído');
+      toast('Lançamento excluído com sucesso');
       await load();
     } catch (err) {
       toast((err as Error).message, 'error');
@@ -128,12 +144,15 @@ export default function CreditCard() {
   }
 
   async function handleReopenInvoice() {
-    if (
-      !confirm(
-        `Deseja desfazer o pagamento da fatura de ${monthLabel(month)}?\nO valor será restaurado no seu saldo da conta Nubank.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: 'Desfazer Pagamento da Fatura?',
+      message: `Deseja desfazer o pagamento da fatura de ${monthLabel(month)}?\n\nO valor pago será restaurado automaticamente no seu saldo da conta Nubank.`,
+      confirmText: 'Desfazer Pagamento',
+      cancelText: 'Voltar',
+      variant: 'warning',
+    });
+    if (!ok) return;
+
     setPaying(true);
     try {
       await api('/credit-card/reopen', {
@@ -186,16 +205,42 @@ export default function CreditCard() {
 
   const invoiceCategoryDistribution = useMemo(() => {
     if (!invoice?.expenses) return [];
-    const map = new Map<string, number>();
+    const map = new Map<string, { amount: number; id: number | string }>();
     for (const exp of invoice.expenses) {
       const catName = exp.category_name || 'Outros';
-      map.set(catName, (map.get(catName) ?? 0) + exp.amount_cents);
+      const prev = map.get(catName);
+      if (prev) {
+        prev.amount += exp.amount_cents;
+      } else {
+        map.set(catName, { amount: exp.amount_cents, id: exp.category_id });
+      }
     }
-    return [...map.entries()].map(([name, amount_cents]) => ({
-      name,
-      amount_cents,
-    }));
-  }, [invoice]);
+    return [...map.entries()].map(([name, data]) => {
+      const isSelected = String(selectedCategory) === String(data.id);
+      return {
+        id: data.id,
+        name,
+        amount_cents: data.amount,
+        isSelected,
+        onClick: () => {
+          if (String(selectedCategory) === String(data.id)) {
+            setSelectedCategory('all');
+          } else {
+            setSelectedCategory(String(data.id));
+            if (!expensesCollapse.isOpen) {
+              expensesCollapse.setIsOpen(true);
+            }
+            setTimeout(() => {
+              const el = document.getElementById('fatura-lancamentos-section');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }, 60);
+          }
+        },
+      };
+    });
+  }, [invoice, selectedCategory, expensesCollapse]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>();
@@ -650,7 +695,7 @@ export default function CreditCard() {
           )}
 
           {/* Filtros da lista */}
-          <Card className="space-y-3.5">
+          <Card id="fatura-lancamentos-section" className="space-y-3.5">
             <div
               className={`flex flex-wrap items-center justify-between gap-2 ${
                 expensesCollapse.isOpen ? 'border-b border-white/[0.06] pb-3' : ''
@@ -735,19 +780,20 @@ export default function CreditCard() {
                   )}
                 </div>
 
-                {/* Filtro por Categoria */}
-                <select
+                {/* Filtro por Categoria com CustomSelect */}
+                <CustomSelect
                   value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-purple-500/60"
-                >
-                  <option value="all">Todas as categorias</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSelectedCategory}
+                  options={[
+                    { value: 'all', label: 'Todas as categorias' },
+                    ...categories.map((c) => ({
+                      value: String(c.id),
+                      label: c.name,
+                    })),
+                  ]}
+                  placeholder="Selecione uma categoria"
+                  searchPlaceholder="Pesquisar categoria..."
+                />
               </div>
             )}
           </Card>

@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type InputHTMLAttributes } from 'react';
+import { useState, useRef, useEffect, useMemo, type ReactNode, type InputHTMLAttributes } from 'react';
 import { useMonth } from '../context';
 import { monthLabel, shiftMonth, currentMonth, percent } from '../format';
 
@@ -135,8 +135,19 @@ export function ProgressBar({ spent, budget, className = 'h-2' }: { spent: numbe
 }
 
 // ---------- Blocos ----------
-export const Card = ({ children, className = '' }: { children: ReactNode; className?: string }) => (
-  <div className={`rounded-2xl border border-white/[0.08] bg-zinc-950/85 p-4 shadow-xl shadow-black/30 backdrop-blur-sm ${className}`}>
+export const Card = ({
+  children,
+  className = '',
+  id,
+}: {
+  children: ReactNode;
+  className?: string;
+  id?: string;
+}) => (
+  <div
+    id={id}
+    className={`rounded-2xl border border-white/[0.08] bg-zinc-950/85 p-4 shadow-xl shadow-black/30 backdrop-blur-sm ${className}`}
+  >
     {children}
   </div>
 );
@@ -223,5 +234,198 @@ export function CollapseButton({
         className={`h-4 w-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : 'rotate-0'}`}
       />
     </button>
+  );
+}
+
+// ---------- Select / Dropdown Customizado Estilizado ----------
+export type SelectOption = {
+  value: string | number;
+  label: string;
+  color?: string;
+  badge?: string;
+};
+
+export function CustomSelect({
+  value,
+  onChange,
+  options,
+  placeholder = 'Selecione uma opção',
+  className = '',
+  searchPlaceholder = 'Buscar...',
+  disabled = false,
+  align = 'left',
+}: {
+  value: string | number;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  className?: string;
+  searchPlaceholder?: string;
+  disabled?: boolean;
+  align?: 'left' | 'right';
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const selectedOption = useMemo(() => {
+    return options.find((opt) => String(opt.value) === String(value));
+  }, [options, value]);
+
+  // Filtro de pesquisa
+  const filteredOptions = useMemo(() => {
+    if (!searchTerm.trim()) return options;
+    const q = searchTerm.toLowerCase();
+    return options.filter((opt) => opt.label.toLowerCase().includes(q));
+  }, [options, searchTerm]);
+
+  // Foco no input de busca ao abrir
+  useEffect(() => {
+    if (isOpen && searchInputRef.current && options.length > 5) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    } else {
+      setSearchTerm('');
+    }
+  }, [isOpen, options.length]);
+
+  // Fechar ao clicar fora ou pressionar Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={containerRef} className={`relative w-full ${className}`}>
+      {/* Botão Gatilho (Trigger) */}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setIsOpen((prev) => !prev)}
+        className={`flex w-full items-center justify-between gap-2.5 rounded-xl border border-white/[0.08] bg-zinc-900/90 px-3.5 py-2.5 text-xs sm:text-sm font-medium text-zinc-100 transition shadow-inner hover:border-white/20 hover:bg-zinc-850 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 ${
+          isOpen ? 'border-emerald-500/50 ring-2 ring-emerald-500/20' : ''
+        } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1 text-left">
+          {selectedOption?.color && (
+            <span
+              className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-white/10"
+              style={{ backgroundColor: selectedOption.color }}
+            />
+          )}
+          <span className="truncate">
+            {selectedOption ? selectedOption.label : placeholder}
+          </span>
+          {selectedOption?.badge && (
+            <span className="rounded-md bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+              {selectedOption.badge}
+            </span>
+          )}
+        </div>
+        <IconChevronDown
+          className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform duration-200 ${
+            isOpen ? 'rotate-180 text-emerald-400' : ''
+          }`}
+        />
+      </button>
+
+      {/* Popover / Dropdown Menu */}
+      {isOpen && (
+        <div
+          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} z-50 mt-1.5 w-full min-w-[220px] max-w-[420px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 p-1.5 shadow-2xl shadow-black/90 backdrop-blur-xl ring-1 ring-black/50 animate-in fade-in zoom-in-95 duration-100`}
+        >
+          {/* Campo de Busca Rápida (quando houver mais de 5 opções) */}
+          {options.length > 5 && (
+            <div className="relative mb-1 px-1 pt-1">
+              <IconSearch className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full rounded-xl border border-white/[0.08] bg-zinc-900/90 pl-8 pr-7 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-emerald-500/50"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-zinc-300"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Lista com Rolagem */}
+          <div className="max-h-56 overflow-y-auto space-y-0.5 overscroll-contain pr-0.5">
+            {filteredOptions.length === 0 ? (
+              <div className="py-4 text-center text-xs text-zinc-500 font-medium">
+                Nenhuma opção encontrada
+              </div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const isSelected = String(opt.value) === String(value);
+                return (
+                  <button
+                    key={String(opt.value)}
+                    type="button"
+                    onClick={() => {
+                      onChange(String(opt.value));
+                      setIsOpen(false);
+                      setSearchTerm('');
+                    }}
+                    className={`group flex w-full items-center justify-between gap-2.5 rounded-xl px-3 py-2 text-left text-xs sm:text-sm font-medium transition cursor-pointer select-none ${
+                      isSelected
+                        ? 'bg-emerald-500/15 text-emerald-300 font-semibold border border-emerald-500/25'
+                        : 'text-zinc-300 hover:bg-zinc-900/90 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      {opt.color ? (
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-white/10"
+                          style={{ backgroundColor: opt.color }}
+                        />
+                      ) : (
+                        <span className="h-1.5 w-1.5 rounded-full bg-zinc-700 group-hover:bg-zinc-500 shrink-0" />
+                      )}
+                      <span className="truncate">{opt.label}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {opt.badge && (
+                        <span className="rounded-md bg-zinc-900 border border-white/[0.06] px-1.5 py-0.5 text-[10px] text-zinc-400 font-semibold">
+                          {opt.badge}
+                        </span>
+                      )}
+                      {isSelected && (
+                        <IconCheck className="h-4 w-4 text-emerald-400 shrink-0 stroke-[2.5]" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

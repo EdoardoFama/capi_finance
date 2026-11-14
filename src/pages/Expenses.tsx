@@ -9,7 +9,7 @@ import {
   type AccountId,
   ACCOUNT_DEFINITIONS,
 } from '../api';
-import { useMonth, useToast } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
 import { dayLabel, formatBRL, formatCurrencyInput, parseBRL, percent, todayISO } from '../format';
 import {
   Card,
@@ -43,6 +43,8 @@ const QUICK_INFLOW_SUGGESTIONS = [
 export default function Expenses() {
   const { month, setMonth } = useMonth();
   const toast = useToast();
+  const confirm = useConfirm();
+  const confirmChoice = useConfirmChoice();
   const [params, setParams] = useSearchParams();
 
   // Tipo de Lançamento: Saída vs Entrada
@@ -216,11 +218,16 @@ export default function Expenses() {
   // Exclusão de Saída
   async function removeExpense(exp: Expense) {
     if (exp.installment_total > 1 && exp.installment_group_id) {
-      const deleteAll = confirm(
-        `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
-          `Deseja excluir TODAS as ${exp.installment_total} parcelas?\n\n` +
-          `[OK] = Excluir todas as parcelas\n[Cancelar] = Excluir apenas esta parcela`,
-      );
+      const choice = await confirmChoice({
+        title: 'Excluir Gasto Parcelado',
+        message: `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}) no valor de ${formatBRL(exp.amount_cents)}.\n\nComo deseja proceder com a exclusão?`,
+        confirmText: 'Excluir todas as parcelas',
+        secondaryText: 'Apenas esta parcela',
+        cancelText: 'Cancelar',
+        variant: 'danger',
+      });
+      if (!choice) return;
+      const deleteAll = choice === 'confirm';
       try {
         await api(`/expenses/${exp.id}?all_installments=${deleteAll}`, { method: 'DELETE' });
         toast(deleteAll ? 'Todas as parcelas foram excluídas' : 'Parcela excluída');
@@ -231,7 +238,15 @@ export default function Expenses() {
       return;
     }
 
-    if (!confirm(`Excluir a saída de ${formatBRL(exp.amount_cents)} (${exp.title || exp.category_name})?`)) return;
+    const ok = await confirm({
+      title: 'Excluir Saída?',
+      message: `Deseja realmente excluir a saída de ${formatBRL(exp.amount_cents)} (${exp.title || exp.category_name})?`,
+      confirmText: 'Excluir',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
     try {
       await api(`/expenses/${exp.id}`, { method: 'DELETE' });
       toast('Lançamento excluído');
@@ -244,13 +259,15 @@ export default function Expenses() {
   // Exclusão de Entrada
   async function removeInflow(inf: Inflow) {
     const accInfo = accountsList.find((a) => a.id === inf.account_id);
-    if (
-      !confirm(
-        `Excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n` +
-          `O saldo da conta ${accInfo?.name ?? 'Conta'} será ajustado (descontando esse valor).`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: 'Excluir Entrada?',
+      message: `Excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n\nO saldo da conta ${accInfo?.name ?? 'Conta'} será ajustado (descontando esse valor).`,
+      confirmText: 'Excluir Entrada',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
     try {
       await api(`/inflows/${inf.id}`, { method: 'DELETE' });
       toast('Entrada excluída e saldo ajustado');

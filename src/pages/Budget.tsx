@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type Category, type Income } from '../api';
-import { useToast } from '../context';
+import { useToast, useConfirm } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL } from '../format';
 import { Card, CollapseButton, IconPlus, IconTrash, Input, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
@@ -407,6 +407,7 @@ function AddCategoryRow({
    ========================================================= */
 export default function Budget() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [incomes, setIncomes] = useState<Income[] | null>(null);
   const [cats, setCats] = useState<Category[] | null>(null);
   const [catFilter, setCatFilter] = useState<'all' | 'fixed' | 'variable'>('all');
@@ -590,7 +591,14 @@ export default function Budget() {
                     setIncomes((l) => l!.map((x) => (x.id === id ? upd : x)));
                   }}
                   onDelete={async (id, name) => {
-                    if (!confirm(`Excluir ganho "${name}"?`)) return;
+                    const ok = await confirm({
+                      title: 'Excluir Ganho Previsto?',
+                      message: `Deseja realmente excluir a fonte de renda "${name}"?`,
+                      confirmText: 'Excluir Ganho',
+                      cancelText: 'Cancelar',
+                      variant: 'danger',
+                    });
+                    if (!ok) return;
                     await run(() => api(`/incomes/${id}`, { method: 'DELETE' }), 'Ganho excluído');
                     setIncomes((l) => l!.filter((x) => x.id !== id));
                   }}
@@ -689,7 +697,14 @@ export default function Budget() {
                     setCats((l) => l!.map((x) => (x.id === id ? upd : x)));
                   }}
                   onDelete={async (id, name) => {
-                    if (!confirm(`Excluir a categoria "${name}"?`)) return;
+                    const ok = await confirm({
+                      title: 'Excluir Categoria?',
+                      message: `Deseja realmente excluir a categoria "${name}"?`,
+                      confirmText: 'Excluir Categoria',
+                      cancelText: 'Cancelar',
+                      variant: 'danger',
+                    });
+                    if (!ok) return;
                     await run(() => api(`/categories/${id}`, { method: 'DELETE' }), 'Categoria excluída');
                     setCats((l) => l!.filter((x) => x.id !== id));
                   }}

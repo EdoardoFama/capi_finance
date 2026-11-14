@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, type Category, type Expense, type Inflow, type UserAccount } from '../api';
-import { useMonth, useToast } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import {
   Card,
   CollapseButton,
+  CustomSelect,
   IconDownload,
   IconEdit,
   IconPlus,
@@ -23,6 +24,8 @@ import DistributionChart from '../components/DistributionChart';
 export default function History() {
   const { month } = useMonth();
   const toast = useToast();
+  const confirm = useConfirm();
+  const confirmChoice = useConfirmChoice();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const listCollapse = useCollapsible('history_list', true);
@@ -101,11 +104,16 @@ export default function History() {
 
   async function removeExpense(exp: Expense) {
     if (exp.installment_total > 1 && exp.installment_group_id) {
-      const deleteAll = confirm(
-        `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}).\n\n` +
-          `Deseja excluir TODAS as ${exp.installment_total} parcelas?\n\n` +
-          `[OK] = Excluir todas as parcelas\n[Cancelar] = Excluir apenas esta parcela`,
-      );
+      const choice = await confirmChoice({
+        title: 'Excluir Gasto Parcelado',
+        message: `Este gasto é parcelado (${exp.installment_current}/${exp.installment_total}) no valor de ${formatBRL(exp.amount_cents)}.\n\nComo deseja proceder?`,
+        confirmText: 'Excluir todas as parcelas',
+        secondaryText: 'Apenas esta parcela',
+        cancelText: 'Cancelar',
+        variant: 'danger',
+      });
+      if (!choice) return;
+      const deleteAll = choice === 'confirm';
       try {
         await api(`/expenses/${exp.id}?all_installments=${deleteAll}`, { method: 'DELETE' });
         toast(deleteAll ? 'Todas as parcelas foram excluídas' : 'Parcela excluída');
@@ -116,7 +124,15 @@ export default function History() {
       return;
     }
 
-    if (!confirm(`Deseja excluir o gasto de ${formatBRL(exp.amount_cents)} em ${exp.category_name}?`)) return;
+    const ok = await confirm({
+      title: 'Excluir Lançamento?',
+      message: `Deseja realmente excluir o gasto de ${formatBRL(exp.amount_cents)} em ${exp.category_name}?`,
+      confirmText: 'Excluir',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
     try {
       await api(`/expenses/${exp.id}`, { method: 'DELETE' });
       toast('Lançamento excluído');
@@ -128,13 +144,15 @@ export default function History() {
 
   async function removeInflow(inf: Inflow) {
     const accInfo = userAccounts.find((a) => a.slug === inf.account_id);
-    if (
-      !confirm(
-        `Deseja excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n` +
-          `O saldo da conta ${accInfo?.name ?? 'Conta'} será ajustado (descontando esse valor).`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: 'Excluir Entrada?',
+      message: `Deseja excluir a entrada de ${formatBRL(inf.amount_cents)} (${inf.description || 'Entrada'})?\n\nO saldo da conta ${accInfo?.name ?? 'Conta'} será ajustado (descontando esse valor).`,
+      confirmText: 'Excluir Entrada',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
     try {
       await api(`/inflows/${inf.id}`, { method: 'DELETE' });
       toast('Entrada excluída');
@@ -203,20 +221,45 @@ export default function History() {
       .reduce((acc, curr) => acc + curr.data.amount_cents, 0);
   }, [filteredItems]);
 
-  // Distribuição dos gastos filtrados por categoria (apenas saídas)
+  // Distribuição dos gastos por categoria (apenas saídas do mês)
   const categoryDistribution = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const item of filteredItems) {
-      if (item.kind === 'expense') {
-        const name = item.data.category_name || 'Outros';
-        map.set(name, (map.get(name) ?? 0) + item.data.amount_cents);
+    if (!expenses) return [];
+    const map = new Map<string, { amount: number; id: number }>();
+    for (const exp of expenses) {
+      const name = exp.category_name || 'Outros';
+      const prev = map.get(name);
+      if (prev) {
+        prev.amount += exp.amount_cents;
+      } else {
+        map.set(name, { amount: exp.amount_cents, id: exp.category_id });
       }
     }
-    return [...map.entries()].map(([name, amount_cents]) => ({
-      name,
-      amount_cents,
-    }));
-  }, [filteredItems]);
+    return [...map.entries()].map(([name, data]) => {
+      const isSelected = String(selectedCategory) === String(data.id);
+      return {
+        id: data.id,
+        name,
+        amount_cents: data.amount,
+        isSelected,
+        onClick: () => {
+          if (String(selectedCategory) === String(data.id)) {
+            handleCategorySelect('all');
+          } else {
+            handleCategorySelect(String(data.id));
+            if (!listCollapse.isOpen) {
+              listCollapse.setIsOpen(true);
+            }
+            setTimeout(() => {
+              const el = document.getElementById('extrato-filtros-section');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            }, 60);
+          }
+        },
+      };
+    });
+  }, [expenses, selectedCategory, listCollapse, handleCategorySelect]);
 
   // Agrupamento por dia (ordenado do mais recente pro mais antigo)
   const grouped = useMemo(() => {
@@ -337,17 +380,17 @@ export default function History() {
       )}
 
       {/* Gráfico de distribuição dos gastos realizados */}
-      {totalFilteredExpenses > 0 && selectedCategory === 'all' && (
+      {(expenses?.length ?? 0) > 0 && (
         <DistributionChart
           title="Distribuição dos Gastos Realizados"
-          subtitle="Para onde foi o seu dinheiro de acordo com as saídas listadas abaixo"
+          subtitle="Para onde foi o seu dinheiro de acordo com as saídas deste mês • Toque para filtrar"
           items={categoryDistribution}
           storageKey="history_distribution"
         />
       )}
 
       {/* Resumo e Filtros */}
-      <Card className="space-y-4">
+      <Card id="extrato-filtros-section" className="space-y-4">
         {/* Balanço Filtrado: Saídas, Entradas e Saldo */}
         <div
           className={`flex flex-wrap items-center justify-between gap-3 ${
@@ -477,19 +520,20 @@ export default function History() {
             )}
           </div>
 
-          {/* Filtro por Categoria */}
-          <select
+          {/* Filtro por Categoria com CustomSelect */}
+          <CustomSelect
             value={selectedCategory}
-            onChange={(e) => handleCategorySelect(e.target.value)}
-            className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
-          >
-            <option value="all">Todas as categorias</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            onChange={(val) => handleCategorySelect(val)}
+            options={[
+              { value: 'all', label: 'Todas as categorias' },
+              ...categories.map((c) => ({
+                value: String(c.id),
+                label: c.name,
+              })),
+            ]}
+            placeholder="Selecione uma categoria"
+            searchPlaceholder="Pesquisar categoria..."
+          />
         </div>
           </>
         )}

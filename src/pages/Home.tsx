@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS } from '../api';
-import { useMonth, useToast } from '../context';
+import { useMonth, useToast, useConfirm } from '../context';
 import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth } from '../format';
 import {
   Card,
@@ -191,6 +191,7 @@ function AccountCard({
 export default function Home() {
   const { month } = useMonth();
   const toast = useToast();
+  const confirm = useConfirm();
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState('');
   const [fixedFilter, setFixedFilter] = useState<'all' | 'available' | 'done'>('all');
@@ -286,10 +287,14 @@ export default function Home() {
   }
 
   async function handleDeleteUserAccount(acc: AccountBalance) {
-    const confirm = window.confirm(
-      `Tem certeza que deseja excluir a conta "${acc.name}"? Os saldos definidos para ela serão removidos.`,
-    );
-    if (!confirm) return;
+    const ok = await confirm({
+      title: 'Excluir Conta?',
+      message: `Tem certeza que deseja excluir a conta "${acc.name}"?\n\nOs saldos definidos para ela serão removidos.`,
+      confirmText: 'Excluir Conta',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
 
     try {
       if (acc.id) {

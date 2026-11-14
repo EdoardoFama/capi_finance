@@ -95,6 +95,40 @@ export default function Login() {
     e.preventDefault();
     setError('');
 
+    const cleanName = username.trim().replace(/\s+/g, ' ');
+    if (!cleanName) {
+      setError('Informe seu Nome.');
+      return;
+    }
+    if (/\d/.test(cleanName)) {
+      setError('O campo Nome não pode conter números. Digite apenas letras e espaços.');
+      return;
+    }
+    const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+    if (!nameRegex.test(cleanName)) {
+      setError('O campo Nome não pode conter hífen ou símbolos especiais. Digite apenas letras e espaços.');
+      return;
+    }
+    if (cleanName.length < 2 || cleanName.length > 60) {
+      setError('O Nome deve ter entre 2 e 60 caracteres.');
+      return;
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setError('Informe seu E-mail.');
+      return;
+    }
+    if (!cleanEmail.includes('@')) {
+      setError('O e-mail precisa conter o caractere "@".');
+      return;
+    }
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Informe um e-mail real e válido (ex: seuemail@gmail.com, hotmail.com, outlook.com).');
+      return;
+    }
+
     if (password.length < 6) {
       setError('A senha deve ter pelo menos 6 caracteres.');
       return;
@@ -108,9 +142,9 @@ export default function Login() {
     try {
       await api('/auth/signup/request', {
         method: 'POST',
-        body: { username, email, password },
+        body: { username: cleanName, email: cleanEmail, password },
       });
-      toast(`Código enviado para ${email}`);
+      toast(`Código enviado para ${cleanEmail}`);
       setMode('signup_otp');
     } catch (err) {
       setError((err as Error).message);
@@ -275,12 +309,14 @@ export default function Login() {
         {mode === 'signup_data' && (
           <form onSubmit={requestSignupOtp} className="space-y-3">
             <div>
-              <label className="text-[11px] text-zinc-400 uppercase font-semibold block mb-1">Nome de usuário</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-zinc-400 uppercase font-semibold">Nome</label>
+                <span className="text-[10px] text-zinc-500 font-medium">Apenas letras e espaços</span>
+              </div>
               <Input
-                placeholder="Ex: joao_silva"
-                autoComplete="username"
-                autoCapitalize="none"
-                autoCorrect="off"
+                placeholder="Ex: João Silva"
+                autoComplete="name"
+                autoCapitalize="words"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -288,7 +324,10 @@ export default function Login() {
             </div>
 
             <div>
-              <label className="text-[11px] text-zinc-400 uppercase font-semibold block mb-1">E-mail</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[11px] text-zinc-400 uppercase font-semibold">E-mail</label>
+                <span className="text-[10px] text-zinc-500 font-medium">Hotmail, Outlook, Gmail...</span>
+              </div>
               <Input
                 type="email"
                 placeholder="seuemail@exemplo.com"

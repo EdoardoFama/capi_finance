@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type InvestmentAccount, type InvestmentSnapshot, type InvestmentsData, type RedeemResult, type UserAccount } from '../api';
-import { useToast } from '../context';
+import { useToast, useConfirm } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL, shiftMonth, todayISO } from '../format';
-import { Card, CollapseButton, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner, useCollapsible } from '../components/ui';
+import { Card, CollapseButton, CustomSelect, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 const MONTH_NAMES = [
@@ -18,6 +18,7 @@ function formatMonthHeader(ym: string) {
 
 export default function Investments() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [data, setData] = useState<InvestmentsData | null>(null);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -310,10 +311,14 @@ export default function Investments() {
   }
 
   async function handleDeleteAccount(accId: number, accName: string) {
-    const confirmDelete = window.confirm(
-      `Deseja realmente excluir a corretora "${accName}" e todo o histórico de saldos dela? Esta ação não pode ser desfeita.`,
-    );
-    if (!confirmDelete) return;
+    const ok = await confirm({
+      title: 'Excluir Corretora?',
+      message: `Deseja realmente excluir a corretora "${accName}" e todo o histórico de saldos dela?\n\nEsta ação não poderá ser desfeita.`,
+      confirmText: 'Excluir Corretora',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
 
     try {
       await api(`/investments/accounts/${accId}`, { method: 'DELETE' });
@@ -809,20 +814,19 @@ export default function Investments() {
                 <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
                   Corretora de Origem (Saque)
                 </label>
-                <select
-                  value={redeemAccountId ?? ''}
-                  onChange={(e) => setRedeemAccountId(Number(e.target.value))}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 font-bold outline-none focus:border-amber-500/60"
-                >
-                  {data.accounts.map((acc) => {
+                <CustomSelect
+                  value={String(redeemAccountId ?? '')}
+                  onChange={(val) => setRedeemAccountId(Number(val))}
+                  options={data.accounts.map((acc) => {
                     const bal = getAccountLatestBalance(acc.id);
-                    return (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name} — Saldo: {formatBRL(bal)} {bal <= 0 ? '(Sem saldo)' : ''}
-                      </option>
-                    );
+                    return {
+                      value: String(acc.id),
+                      label: `${acc.name} — ${formatBRL(bal)}`,
+                      badge: bal <= 0 ? 'Sem saldo' : undefined,
+                    };
                   })}
-                </select>
+                  searchPlaceholder="Buscar corretora..."
+                />
                 <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
                   <span>Disponível nesta corretora:</span>
                   <span className="font-bold text-zinc-200">{formatBRL(selectedRedeemBal)}</span>
@@ -834,21 +838,19 @@ export default function Investments() {
                 <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
                   Conta de Destino (Receber Saldo)
                 </label>
-                <select
+                <CustomSelect
                   value={redeemDestAccount}
-                  onChange={(e) => setRedeemDestAccount(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-zinc-100 font-bold outline-none focus:border-amber-500/60"
-                >
-                  {userAccounts.length === 0 ? (
-                    <option value="nubank">NUBANK (Padrão)</option>
-                  ) : (
-                    userAccounts.map((uAcc) => (
-                      <option key={uAcc.slug} value={uAcc.slug}>
-                        {uAcc.name}
-                      </option>
-                    ))
-                  )}
-                </select>
+                  onChange={setRedeemDestAccount}
+                  options={
+                    userAccounts.length === 0
+                      ? [{ value: 'nubank', label: 'NUBANK (Padrão)' }]
+                      : userAccounts.map((uAcc) => ({
+                          value: uAcc.slug,
+                          label: uAcc.name,
+                        }))
+                  }
+                  searchPlaceholder="Buscar conta..."
+                />
               </div>
 
               {/* Valor do Resgate */}

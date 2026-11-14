@@ -3,10 +3,12 @@ import { formatBRL } from '../format';
 import { IconArrowDownLeft, IconEdit, IconTrash, CollapseButton, useCollapsible } from './ui';
 
 export type DistributionItem = {
-  id?: number;
+  id?: number | string;
   name: string;
   amount_cents: number;
   color?: string;
+  isSelected?: boolean;
+  onClick?: () => void;
   onRedeem?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -146,13 +148,18 @@ export default function DistributionChart({
                   key={`segment-${it.name}-${idx}`}
                   onMouseEnter={() => setHoveredIdx(allItems.findIndex((a) => a.name === it.name))}
                   onMouseLeave={() => setHoveredIdx(null)}
+                  onClick={it.onClick}
                   style={{
                     width: `${Math.max(pct, 1.2)}%`,
                     backgroundColor: it.color,
                     opacity: isDimmed ? 0.3 : 1,
                   }}
-                  className="h-full cursor-pointer transition-all duration-300 first:rounded-l-full last:rounded-r-full"
-                  title={`${it.name}: ${formatBRL(it.amount_cents)} (${pct.toFixed(1)}%)`}
+                  className={`h-full cursor-pointer transition-all duration-300 first:rounded-l-full last:rounded-r-full ${
+                    it.onClick ? 'hover:scale-y-125' : ''
+                  }`}
+                  title={`${it.name}: ${formatBRL(it.amount_cents)} (${pct.toFixed(1)}%)${
+                    it.onClick ? ' • Clique para filtrar' : ''
+                  }`}
                 />
               );
             })
@@ -170,8 +177,14 @@ export default function DistributionChart({
               key={`legend-${it.name}-${idx}`}
               onMouseEnter={() => setHoveredIdx(idx)}
               onMouseLeave={() => setHoveredIdx(null)}
+              onClick={it.onClick}
+              title={it.onClick ? `Filtrar por ${it.name}` : undefined}
               className={`group relative overflow-hidden rounded-xl border p-3 transition-all duration-200 ${
-                isHovered
+                it.onClick ? 'cursor-pointer active:scale-[0.99]' : ''
+              } ${
+                it.isSelected
+                  ? 'border-purple-500/80 bg-purple-500/15 ring-2 ring-purple-500/40 shadow-lg shadow-purple-500/20'
+                  : isHovered
                   ? 'border-white/20 bg-zinc-900/90 shadow-md scale-[1.01]'
                   : 'border-white/[0.06] bg-zinc-900/35 hover:border-white/15 hover:bg-zinc-900/60'
               }`}
@@ -217,15 +230,22 @@ export default function DistributionChart({
                   </div>
                 </div>
 
-                <span
-                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-extrabold tabular-nums"
-                  style={{
-                    backgroundColor: `${it.color}20`,
-                    color: it.color,
-                  }}
-                >
-                  {pct.toFixed(1)}%
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {it.isSelected && (
+                    <span className="rounded-md bg-purple-500/25 border border-purple-400/40 px-1.5 py-0.5 text-[10px] font-extrabold text-purple-200">
+                      Filtrando
+                    </span>
+                  )}
+                  <span
+                    className="rounded-md px-1.5 py-0.5 text-[11px] font-extrabold tabular-nums"
+                    style={{
+                      backgroundColor: `${it.color}20`,
+                      color: it.color,
+                    }}
+                  >
+                    {pct.toFixed(1)}%
+                  </span>
+                </div>
               </div>
 
               {/* Barra de Progresso e Valor */}

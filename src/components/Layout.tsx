@@ -1,5 +1,5 @@
 import { NavLink, Outlet, Link } from 'react-router';
-import { useAuth } from '../context';
+import { useAuth, useConfirm } from '../context';
 import { IconCreditCard, IconHome, IconList, IconLogout, IconPlus, IconTrendingUp, IconWallet } from './ui';
 
 const NAV = [
@@ -13,7 +13,19 @@ const NAV = [
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const confirm = useConfirm();
   const initial = (user?.username?.[0] ?? 'U').toUpperCase();
+
+  async function handleLogout() {
+    const ok = await confirm({
+      title: 'Sair da Conta?',
+      message: 'Deseja realmente encerrar sua sessão no Capi Finance?',
+      confirmText: 'Sair da Conta',
+      cancelText: 'Permanecer Conectado',
+      variant: 'warning',
+    });
+    if (ok) logout();
+  }
 
   return (
     <div className="min-h-dvh flex flex-col">
@@ -91,7 +103,7 @@ export default function Layout() {
               <span className="text-xs font-medium text-zinc-300 max-w-28 truncate">{user?.username}</span>
             </div>
             <button
-              onClick={() => confirm('Sair da conta?') && logout()}
+              onClick={handleLogout}
               className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-zinc-400 transition hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
               title="Sair da conta"
               aria-label="Sair da conta"

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type AdminUser } from '../api';
-import { useAuth, useToast } from '../context';
+import { useAuth, useToast, useConfirm } from '../context';
 import { Card, PageTitle, Spinner } from '../components/ui';
 
 export default function Admin() {
   const { user } = useAuth();
   const toast = useToast();
+  const confirm = useConfirm();
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,7 +27,14 @@ export default function Admin() {
 
   async function toggleStatus(u: AdminUser) {
     const action = u.is_active === 1 ? 'bloquear' : 'desbloquear';
-    if (!confirm(`Deseja realmente ${action} o usuário "${u.username}"?`)) return;
+    const ok = await confirm({
+      title: `${action === 'bloquear' ? 'Bloquear' : 'Desbloquear'} Usuário?`,
+      message: `Deseja realmente ${action} o usuário "${u.username}"?`,
+      confirmText: action === 'bloquear' ? 'Bloquear' : 'Desbloquear',
+      cancelText: 'Cancelar',
+      variant: action === 'bloquear' ? 'warning' : 'primary',
+    });
+    if (!ok) return;
 
     try {
       await api(`/admin/users/${u.id}/toggle-status`, { method: 'POST' });
@@ -38,7 +46,14 @@ export default function Admin() {
   }
 
   async function deleteUser(u: AdminUser) {
-    if (!confirm(`⚠️ ATENÇÃO: Deseja EXCLUIR permanentemente o usuário "${u.username}" e todos os seus dados? Esta ação não pode ser desfeita.`)) return;
+    const ok = await confirm({
+      title: 'Excluir Usuário Permanentemente?',
+      message: `⚠️ ATENÇÃO: Deseja EXCLUIR permanentemente o usuário "${u.username}" e todos os seus dados?\n\nEsta ação é irreversível.`,
+      confirmText: 'Excluir Permanentemente',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
 
     try {
       await api(`/admin/users/${u.id}`, { method: 'DELETE' });

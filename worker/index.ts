@@ -82,28 +82,35 @@ function generateOTP(): string {
 // 1. Iniciar Cadastro: gera OTP e envia por e-mail
 app.post('/auth/signup/request', async (c) => {
   const data = await body(c);
-  const username = str(data.username, 'usuário')!.toLowerCase();
-  const email = str(data.email, 'e-mail')!.toLowerCase();
+  const rawUsername = str(data.username, 'nome') || '';
+  const username = rawUsername.trim().replace(/\s+/g, ' ');
+  const email = (str(data.email, 'e-mail') || '').trim().toLowerCase();
   const password = typeof data.password === 'string' ? data.password : '';
 
-  if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(username)) {
-    bad('Usuário deve ter entre 3 e 30 caracteres alfanuméricos');
+  if (!username) {
+    bad('Informe seu nome');
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    bad('E-mail inválido');
+  if (/\d/.test(username)) {
+    bad('O nome não pode conter números');
+  }
+  if (!/^[A-Za-zÀ-ÖØ-öø-ÿ\s]{2,60}$/.test(username)) {
+    bad('O nome deve conter apenas letras e espaços (sem números, hífens ou símbolos)');
+  }
+  if (!email.includes('@') || !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
+    bad('E-mail inválido. Informe um e-mail real com @ e domínio válido (ex: gmail.com, hotmail.com, outlook.com)');
   }
   if (password.length < 6) {
     bad('A senha deve ter no mínimo 6 caracteres');
   }
 
   // Verifica se username ou email já existem
-  const existing = await c.env.DB.prepare('SELECT username, email FROM users WHERE username = ? OR email = ?')
+  const existing = await c.env.DB.prepare('SELECT username, email FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)')
     .bind(username, email)
     .first<{ username: string; email: string }>();
 
   if (existing) {
-    if (existing.username === username) bad('Nome de usuário já cadastrado', 409);
-    if (existing.email === email) bad('E-mail já cadastrado', 409);
+    if (existing.username.toLowerCase() === username.toLowerCase()) bad('Nome de usuário já cadastrado', 409);
+    if (existing.email && existing.email.toLowerCase() === email.toLowerCase()) bad('E-mail já cadastrado', 409);
   }
 
   const code = generateOTP();
@@ -285,7 +292,7 @@ app.post('/auth/login', async (c) => {
   const password = typeof data.password === 'string' ? data.password : '';
 
   const user = await c.env.DB.prepare(
-    'SELECT id, username, email, password_hash, is_active, is_admin FROM users WHERE username = ? OR email = ?',
+    'SELECT id, username, email, password_hash, is_active, is_admin FROM users WHERE lower(username) = lower(?) OR lower(email) = lower(?)',
   )
     .bind(loginInput, loginInput)
     .first<{ id: number; username: string; email: string; password_hash: string; is_active: number; is_admin: number }>();
