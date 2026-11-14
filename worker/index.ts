@@ -888,6 +888,52 @@ app.get('/dashboard', async (c) => {
   const porForaSpentCents = variableSpentCents;
   const porForaRemainingCents = porForaBudgetCents - porForaSpentCents;
 
+  // Projeção de Fechamento do Mês ("Quanto vai me sobrar?")
+  const inflowRow = await c.env.DB.prepare(
+    'SELECT COALESCE(SUM(amount_cents), 0) AS total FROM inflows WHERE user_id = ? AND received_on >= ? AND received_on < ?'
+  )
+    .bind(uid, start, end)
+    .first<{ total: number }>();
+  const inflowsTotalCents = inflowRow?.total ?? 0;
+
+  const ccRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`
+  )
+    .bind(uid, start, end)
+    .first<{ total: number }>();
+  const ccTotalCents = ccRow?.total ?? 0;
+
+  const invoiceRow = await c.env.DB.prepare(
+    `SELECT paid_amount_cents FROM credit_card_invoices WHERE user_id = ? AND month = ?`
+  )
+    .bind(uid, month)
+    .first<{ paid_amount_cents: number }>();
+  const ccPaidCents = invoiceRow?.paid_amount_cents ?? 0;
+  const invoiceRemainingCents = Math.max(0, ccTotalCents - ccPaidCents);
+
+  const fixedRemainingCents = fixedCats.reduce(
+    (sum, cat) => sum + Math.max(0, cat.budget_cents - cat.spent_cents),
+    0
+  );
+
+  const expectedRemainingIncomeCents = Math.max(0, totalIncomeCents - inflowsTotalCents);
+
+  const nubankAcc = accounts.find((a) => a.account_id === 'nubank');
+  const bankBalanceCents = nubankAcc ? nubankAcc.current_cents : 0;
+
+  const predictedSurplusCents =
+    bankBalanceCents + expectedRemainingIncomeCents - invoiceRemainingCents - fixedRemainingCents;
+
+  const projection = {
+    bank_balance_cents: bankBalanceCents,
+    expected_income_cents: totalIncomeCents,
+    inflows_total_cents: inflowsTotalCents,
+    expected_remaining_income_cents: expectedRemainingIncomeCents,
+    invoice_remaining_cents: invoiceRemainingCents,
+    fixed_remaining_cents: fixedRemainingCents,
+    predicted_surplus_cents: predictedSurplusCents,
+  };
+
   return c.json({
     month,
     total_income_cents: totalIncomeCents,
@@ -901,7 +947,91 @@ app.get('/dashboard', async (c) => {
     por_fora_remaining_cents: porForaRemainingCents,
     categories,
     accounts,
+    projection,
   });
+});
+
+// ---------- comparativo analítico mensal (últimos N meses) ----------
+app.get('/analytics/monthly', async (c) => {
+  const uid = c.get('userId');
+  const count = Math.min(12, Math.max(2, Number(c.req.query('months') || 6)));
+  const currentMonthParam = c.req.query('month') || new Date().toISOString().slice(0, 7);
+
+  // Gera lista ordenada dos últimos `count` meses até o mês solicitado
+  const months: string[] = [];
+  const [currY, currM] = currentMonthParam.split('-').map(Number);
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(currY, currM - 1 - i, 1));
+    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    months.push(ym);
+  }
+
+  const [earliestStart] = monthRange(months[0]);
+  const [, latestEnd] = monthRange(months[months.length - 1]);
+
+  // Busca saídas agrupadas por mês
+  const { results: expensesRows } = await c.env.DB.prepare(
+    `SELECT strftime('%Y-%m', spent_on) as month,
+            COALESCE(SUM(amount_cents), 0) as total_expenses,
+            COALESCE(SUM(CASE WHEN payment_method = 'credit' THEN amount_cents ELSE 0 END), 0) as credit_card,
+            COALESCE(SUM(CASE WHEN payment_method != 'credit' THEN amount_cents ELSE 0 END), 0) as debit
+     FROM expenses
+     WHERE user_id = ? AND spent_on >= ? AND spent_on < ?
+     GROUP BY strftime('%Y-%m', spent_on)`
+  )
+    .bind(uid, earliestStart, latestEnd)
+    .all<{ month: string; total_expenses: number; credit_card: number; debit: number }>();
+
+  // Busca entradas agrupadas por mês
+  const { results: inflowsRows } = await c.env.DB.prepare(
+    `SELECT strftime('%Y-%m', received_on) as month,
+            COALESCE(SUM(amount_cents), 0) as total_inflows
+     FROM inflows
+     WHERE user_id = ? AND received_on >= ? AND received_on < ?
+     GROUP BY strftime('%Y-%m', received_on)`
+  )
+    .bind(uid, earliestStart, latestEnd)
+    .all<{ month: string; total_inflows: number }>();
+
+  // Busca investimentos agrupados por mês
+  const { results: investRows } = await c.env.DB.prepare(
+    `SELECT month, COALESCE(SUM(balance_cents), 0) as total_investments
+     FROM investment_snapshots
+     WHERE user_id = ? AND month >= ? AND month <= ?
+     GROUP BY month`
+  )
+    .bind(uid, months[0], months[months.length - 1])
+    .all<{ month: string; total_investments: number }>();
+
+  const expMap = new Map(expensesRows.map((r) => [r.month, r]));
+  const infMap = new Map(inflowsRows.map((r) => [r.month, r.total_inflows]));
+  const invMap = new Map(investRows.map((r) => [r.month, r.total_investments]));
+
+  const SHORT_MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+  const results = months.map((m) => {
+    const [, monthNum] = m.split('-').map(Number);
+    const label = `${SHORT_MONTHS[(monthNum || 1) - 1]}/${m.slice(2, 4)}`;
+    const exp = expMap.get(m);
+    const expensesCents = exp?.total_expenses ?? 0;
+    const inflowsCents = infMap.get(m) ?? 0;
+    const ccCents = exp?.credit_card ?? 0;
+    const debitCents = exp?.debit ?? 0;
+    const investCents = invMap.get(m) ?? 0;
+
+    return {
+      month: m,
+      month_label: label,
+      expenses_cents: expensesCents,
+      inflows_cents: inflowsCents,
+      credit_card_cents: ccCents,
+      debit_cents: debitCents,
+      investments_cents: investCents,
+      net_cents: inflowsCents - expensesCents,
+    };
+  });
+
+  return c.json(results);
 });
 
 // ---------- gerenciamento de contas do usuário ----------

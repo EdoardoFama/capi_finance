@@ -10,6 +10,7 @@ import {
   IconEdit,
   IconList,
   IconPlus,
+  IconSparkles,
   IconTrash,
   IconWallet,
   MonthPicker,
@@ -197,6 +198,7 @@ export default function Home() {
   const [fixedFilter, setFixedFilter] = useState<'all' | 'available' | 'done'>('all');
 
   const heroCollapse = useCollapsible('home_hero', true);
+  const projectionCollapse = useCollapsible('home_projection', true);
   const accountsCollapse = useCollapsible('home_accounts', true);
   const fixedCatsCollapse = useCollapsible('home_fixed_cats', true);
   const variableCatsCollapse = useCollapsible('home_variable_cats', true);
@@ -520,6 +522,132 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {/* ================= CARD DE PREVISÃO DE SALDO FINAL ================= */}
+          {data.projection && (
+            <div className={`relative overflow-hidden rounded-3xl border ${
+              data.projection.predicted_surplus_cents >= 0
+                ? 'border-emerald-500/30 bg-gradient-to-br from-[#071a12] via-zinc-950 to-[#09140f]'
+                : 'border-red-500/35 bg-gradient-to-br from-[#1f0b0b] via-zinc-950 to-[#140808]'
+            } p-5 sm:p-6 shadow-2xl`}>
+              <div className={`pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full blur-3xl ${
+                data.projection.predicted_surplus_cents >= 0 ? 'bg-emerald-500/15' : 'bg-red-500/15'
+              }`} />
+
+              <div
+                className={`flex flex-wrap items-center justify-between gap-3 ${
+                  projectionCollapse.isOpen ? 'border-b border-white/[0.06] pb-4' : ''
+                } cursor-pointer select-none group`}
+                onClick={projectionCollapse.toggle}
+              >
+                <div className="flex items-center gap-3">
+                  <CollapseButton
+                    isOpen={projectionCollapse.isOpen}
+                    onToggle={projectionCollapse.toggle}
+                  />
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-2xl border ${
+                    data.projection.predicted_surplus_cents >= 0
+                      ? 'border-emerald-500/30 bg-emerald-500/20 text-emerald-300'
+                      : 'border-red-500/30 bg-red-500/20 text-red-300'
+                  } shadow-inner`}>
+                    <IconSparkles className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-extrabold tracking-widest uppercase text-emerald-400">
+                        Projeção Financeira
+                      </span>
+                      <span className={`rounded-md px-1.5 py-0.2 text-[10px] font-bold border ${
+                        data.projection.predicted_surplus_cents >= 0
+                          ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                          : 'border-red-500/30 bg-red-500/15 text-red-300'
+                      }`}>
+                        {data.projection.predicted_surplus_cents >= 0 ? 'Sobra Prevista' : 'Alerta: Déficit'}
+                      </span>
+                    </div>
+                    <h2 className="text-base sm:text-lg font-extrabold text-white group-hover:text-emerald-300 transition">
+                      Quanto vai sobrar no fim do mês?
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <p className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                    Saldo Final Estimado
+                  </p>
+                  <p className={`text-xl sm:text-2xl font-black tabular-nums ${
+                    data.projection.predicted_surplus_cents >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  }`}>
+                    {data.projection.predicted_surplus_cents >= 0 ? '+' : ''}
+                    {formatBRL(data.projection.predicted_surplus_cents)}
+                  </p>
+                </div>
+              </div>
+
+              {projectionCollapse.isOpen && (
+                <div className="mt-4 space-y-4">
+                  {/* Grid de Raio-X dos 4 Pilares */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {/* 1. Saldo Bancário Atual */}
+                    <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/40 p-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                        (+) Saldo Nubank
+                      </span>
+                      <p className="text-base font-extrabold text-white tabular-nums mt-1">
+                        {formatBRL(data.projection.bank_balance_cents)}
+                      </p>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Disponível em conta</span>
+                    </div>
+
+                    {/* 2. Renda a Receber */}
+                    <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/40 p-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/90 block">
+                        (+) A Receber
+                      </span>
+                      <p className="text-base font-extrabold text-emerald-400 tabular-nums mt-1">
+                        +{formatBRL(data.projection.expected_remaining_income_cents)}
+                      </p>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">
+                        {formatBRL(data.projection.inflows_total_cents)} já recebidos
+                      </span>
+                    </div>
+
+                    {/* 3. Fatura Restante Cartão */}
+                    <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/40 p-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400/90 block">
+                        (-) Fatura Cartão
+                      </span>
+                      <p className="text-base font-extrabold text-purple-300 tabular-nums mt-1">
+                        -{formatBRL(data.projection.invoice_remaining_cents)}
+                      </p>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">A liquidar na fatura</span>
+                    </div>
+
+                    {/* 4. Fixos Pendentes */}
+                    <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/40 p-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400/90 block">
+                        (-) Fixos Pendentes
+                      </span>
+                      <p className="text-base font-extrabold text-amber-300 tabular-nums mt-1">
+                        -{formatBRL(data.projection.fixed_remaining_cents)}
+                      </p>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Boletos/metas a quitar</span>
+                    </div>
+                  </div>
+
+                  {/* Fórmula Explicativa */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-zinc-900/30 border border-white/[0.04] px-3.5 py-2 text-[11px] text-zinc-400">
+                    <span>
+                      💡 <b className="text-zinc-200">Cálculo:</b> Saldo Atual + Renda Restante - Fatura a Pagar - Fixos Pendentes
+                    </span>
+                    <span className="text-zinc-500 font-medium">
+                      Atualizado automaticamente conforme você lança gastos e entradas.
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ================= SALDO EM CONTA & BENEFÍCIOS ================= */}
           <section className="space-y-3">

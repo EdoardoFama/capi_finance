@@ -9,9 +9,11 @@ import {
   CustomSelect,
   IconDownload,
   IconEdit,
+  IconList,
   IconPlus,
   IconSearch,
   IconTrash,
+  IconTrendingUp,
   MonthPicker,
   PageTitle,
   Spinner,
@@ -20,6 +22,7 @@ import {
 import { exportCsv, exportPdf, fetchExportData } from '../export';
 import EditExpenseModal from '../components/EditExpenseModal';
 import DistributionChart from '../components/DistributionChart';
+import MonthlyAnalyticsView from '../components/MonthlyAnalyticsView';
 
 export default function History() {
   const { month } = useMonth();
@@ -27,6 +30,7 @@ export default function History() {
   const confirm = useConfirm();
   const confirmChoice = useConfirmChoice();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'monthly' | 'analytics'>('monthly');
 
   const listCollapse = useCollapsible('history_list', true);
 
@@ -300,6 +304,38 @@ export default function History() {
         </div>
       </div>
 
+      {/* Segmented Control: Extrato Mensal vs Comparativo Histórico */}
+      <div className="flex items-center gap-1.5 rounded-2xl border border-white/[0.08] bg-zinc-950/70 p-1 backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => setViewMode('monthly')}
+          className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold transition ${
+            viewMode === 'monthly'
+              ? 'bg-zinc-800 text-white shadow'
+              : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <IconList className="h-4 w-4" />
+          Extrato Mensal
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewMode('analytics')}
+          className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold transition ${
+            viewMode === 'analytics'
+              ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 shadow'
+              : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <IconTrendingUp className="h-4 w-4" />
+          Comparativo Histórico (6 Meses)
+        </button>
+      </div>
+
+      {viewMode === 'analytics' ? (
+        <MonthlyAnalyticsView currentMonth={month} />
+      ) : (
+        <>
       {exportOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
@@ -685,6 +721,8 @@ export default function History() {
           ))}
         </div>
       ))}
+        </>
+      )}
 
       <EditExpenseModal
         expense={editingExpense}

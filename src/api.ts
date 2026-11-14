@@ -132,6 +132,16 @@ export type Expense = {
 
 export type DashboardCategory = Category & { spent_cents: number; count: number; is_fixed: number };
 
+export type DashboardProjection = {
+  bank_balance_cents: number;
+  expected_income_cents: number;
+  inflows_total_cents: number;
+  expected_remaining_income_cents: number;
+  invoice_remaining_cents: number;
+  fixed_remaining_cents: number;
+  predicted_surplus_cents: number;
+};
+
 export type Dashboard = {
   month: string;
   total_income_cents: number;
@@ -145,6 +155,18 @@ export type Dashboard = {
   por_fora_remaining_cents: number;
   categories: DashboardCategory[];
   accounts: AccountBalance[];
+  projection: DashboardProjection;
+};
+
+export type MonthlyAnalyticsItem = {
+  month: string;
+  month_label: string;
+  expenses_cents: number;
+  inflows_cents: number;
+  credit_card_cents: number;
+  debit_cents: number;
+  investments_cents: number;
+  net_cents: number;
 };
 
 export type InvestmentAccount = {

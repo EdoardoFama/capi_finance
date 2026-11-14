@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { NavLink, Outlet, Link } from 'react-router';
 import { useAuth, useConfirm } from '../context';
 import { IconCreditCard, IconHome, IconList, IconLogout, IconPlus, IconTrendingUp, IconWallet } from './ui';
+import InstallPwaModal, { usePwaInstall } from './InstallPwaModal';
 
 const NAV = [
   { to: '/', label: 'Início', icon: IconHome, end: true },
@@ -14,6 +16,8 @@ const NAV = [
 export default function Layout() {
   const { user, logout } = useAuth();
   const confirm = useConfirm();
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const { deferredPrompt, isStandalone, isIos } = usePwaInstall();
   const initial = (user?.username?.[0] ?? 'U').toUpperCase();
 
   async function handleLogout() {
@@ -87,6 +91,18 @@ export default function Layout() {
 
           {/* Perfil & Sair */}
           <div className="flex items-center gap-2 shrink-0">
+            {!isStandalone && (deferredPrompt || isIos) && (
+              <button
+                type="button"
+                onClick={() => setShowInstallModal(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20 active:scale-95 shadow-sm shadow-emerald-500/10"
+                title="Instalar Capi Finance como app no celular"
+              >
+                <span>📱</span>
+                <span className="hidden sm:inline">Instalar App</span>
+              </button>
+            )}
+
             {user?.is_admin && (
               <NavLink
                 to="/admin"
@@ -113,6 +129,14 @@ export default function Layout() {
           </div>
         </div>
       </header>
+
+      {/* Modal de Instalação PWA */}
+      <InstallPwaModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        deferredPrompt={deferredPrompt}
+        isIos={isIos}
+      />
 
       {/* Conteúdo Principal */}
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-5 pb-32 md:pb-14">
