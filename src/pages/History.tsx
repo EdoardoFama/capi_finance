@@ -5,6 +5,7 @@ import { useMonth, useToast } from '../context';
 import { dayLabel, formatBRL, monthLabel } from '../format';
 import {
   Card,
+  CollapseButton,
   IconDownload,
   IconEdit,
   IconPlus,
@@ -13,6 +14,7 @@ import {
   MonthPicker,
   PageTitle,
   Spinner,
+  useCollapsible,
 } from '../components/ui';
 import { exportCsv, exportPdf, fetchExportData } from '../export';
 import EditExpenseModal from '../components/EditExpenseModal';
@@ -22,6 +24,8 @@ export default function History() {
   const { month } = useMonth();
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  const listCollapse = useCollapsible('history_list', true);
 
   const [exportOpen, setExportOpen] = useState(false);
   const [exportScope, setExportScope] = useState<string>('all');
@@ -338,68 +342,88 @@ export default function History() {
           title="Distribuição dos Gastos Realizados"
           subtitle="Para onde foi o seu dinheiro de acordo com as saídas listadas abaixo"
           items={categoryDistribution}
+          storageKey="history_distribution"
         />
       )}
 
       {/* Resumo e Filtros */}
       <Card className="space-y-4">
         {/* Balanço Filtrado: Saídas, Entradas e Saldo */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3.5">
-          <div className="flex flex-wrap items-center gap-4">
-            <div>
-              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
-                Saídas Filtradas
-              </p>
-              <p className="text-xl sm:text-2xl font-black tracking-tight text-white tabular-nums">
-                {formatBRL(totalFilteredExpenses)}
-              </p>
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 ${
+            listCollapse.isOpen ? 'border-b border-white/[0.06] pb-3.5' : ''
+          } cursor-pointer select-none group`}
+          onClick={listCollapse.toggle}
+        >
+          <div className="flex items-center gap-3">
+            <CollapseButton
+              isOpen={listCollapse.isOpen}
+              onToggle={listCollapse.toggle}
+            />
+            <div className="flex flex-wrap items-center gap-4">
+              <div>
+                <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider group-hover:text-emerald-300 transition">
+                  Saídas Filtradas
+                </p>
+                <p className="text-xl sm:text-2xl font-black tracking-tight text-white tabular-nums">
+                  {formatBRL(totalFilteredExpenses)}
+                </p>
+              </div>
+              {totalFilteredInflows > 0 && (
+                <>
+                  <div className="h-8 w-px bg-white/[0.08] hidden sm:block" />
+                  <div>
+                    <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                      Entradas
+                    </p>
+                    <p className="text-xl sm:text-2xl font-black tracking-tight text-emerald-400 tabular-nums">
+                      +{formatBRL(totalFilteredInflows)}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
-            {totalFilteredInflows > 0 && (
-              <>
-                <div className="h-8 w-px bg-white/[0.08] hidden sm:block" />
-                <div>
-                  <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
-                    Entradas
-                  </p>
-                  <p className="text-xl sm:text-2xl font-black tracking-tight text-emerald-400 tabular-nums">
-                    +{formatBRL(totalFilteredInflows)}
-                  </p>
-                </div>
-              </>
-            )}
           </div>
 
           {/* Abas de Tipo: Todos / Saídas / Entradas */}
-          <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setTypeFilter('all')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                typeFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
-              }`}
+          {listCollapse.isOpen && (
+            <div
+              className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs"
+              onClick={(e) => e.stopPropagation()}
             >
-              Todos ({filteredItems.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setTypeFilter('expense')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                typeFilter === 'expense' ? 'bg-rose-500/20 text-rose-300' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Saídas
-            </button>
-            <button
-              type="button"
-              onClick={() => setTypeFilter('inflow')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                typeFilter === 'inflow' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Entradas
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => setTypeFilter('all')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  typeFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Todos ({filteredItems.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTypeFilter('expense')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  typeFilter === 'expense' ? 'bg-rose-500/20 text-rose-300' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Saídas
+              </button>
+              <button
+                type="button"
+                onClick={() => setTypeFilter('inflow')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  typeFilter === 'inflow' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Entradas
+              </button>
+            </div>
+          )}
         </div>
+
+        {listCollapse.isOpen && (
+          <>
 
         {/* Filtro Rápido por Conta */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
@@ -467,11 +491,14 @@ export default function History() {
             ))}
           </select>
         </div>
+          </>
+        )}
       </Card>
 
       {/* Lista do Extrato */}
-      {!expenses || !inflows ? (
-        <Spinner />
+      {listCollapse.isOpen && (
+        !expenses || !inflows ? (
+          <Spinner />
       ) : filteredItems.length === 0 ? (
         <Card className="text-center py-12 text-zinc-500">
           <p className="text-sm font-medium">Nenhum lançamento encontrado para os filtros selecionados.</p>
@@ -613,7 +640,7 @@ export default function History() {
             </div>
           ))}
         </div>
-      )}
+      ))}
 
       <EditExpenseModal
         expense={editingExpense}

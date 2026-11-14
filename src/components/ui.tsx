@@ -1,4 +1,4 @@
-import type { ReactNode, InputHTMLAttributes } from 'react';
+import { useState, type ReactNode, type InputHTMLAttributes } from 'react';
 import { useMonth } from '../context';
 import { monthLabel, shiftMonth, currentMonth, percent } from '../format';
 
@@ -29,6 +29,9 @@ export const IconTrash = (p: { className?: string }) => (
 );
 export const IconChevron = ({ dir = 'left', className }: { dir?: 'left' | 'right'; className?: string }) => (
   <Svg className={className}><path d={dir === 'left' ? 'M15 18l-6-6 6-6' : 'M9 6l6 6-6 6'} /></Svg>
+);
+export const IconChevronDown = (p: { className?: string }) => (
+  <Svg {...p}><path d="M6 9l6 6 6-6" /></Svg>
 );
 export const IconLogout = (p: { className?: string }) => (
   <Svg {...p}><path d="M15 4h4v16h-4" /><path d="M10 8l-4 4 4 4" /><path d="M6 12h10" /></Svg>
@@ -160,3 +163,65 @@ export const Spinner = () => (
     <span className="text-xs font-medium text-zinc-500 animate-pulse">Carregando dados...</span>
   </div>
 );
+
+// ---------- Retração / Expansão de Blocos ----------
+export function useCollapsible(storageKey: string, defaultOpen = true) {
+  const fullKey = `capi_collapse_${storageKey}`;
+  const [isOpen, setIsOpen] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const stored = localStorage.getItem(fullKey);
+        if (stored !== null) return stored === 'true';
+      }
+    } catch {
+      // Fallback
+    }
+    return defaultOpen;
+  });
+
+  const toggle = () => {
+    setIsOpen((prev) => {
+      const next = !prev;
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          localStorage.setItem(fullKey, String(next));
+        }
+      } catch {
+        // Fallback
+      }
+      return next;
+    });
+  };
+
+  return { isOpen, toggle, setIsOpen };
+}
+
+export function CollapseButton({
+  isOpen,
+  onToggle,
+  title,
+  className = '',
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  title?: string;
+  className?: string;
+}) {
+  const label = title || (isOpen ? 'Recolher seção' : 'Expandir seção');
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      title={label}
+      aria-label={label}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/80 text-zinc-400 transition hover:border-white/20 hover:bg-zinc-800 hover:text-white active:scale-95 ${className}`}
+    >
+      <IconChevronDown
+        className={`h-4 w-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : 'rotate-0'}`}
+      />
+    </button>
+  );
+}

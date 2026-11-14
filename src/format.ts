@@ -6,6 +6,47 @@ export const formatBRL = (cents: number) => brl.format(cents / 100);
 export const centsToInput = (cents: number) =>
   (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/** Formata o texto monetário digitado em tempo real com separador de milhar e vírgula decimal */
+export function formatCurrencyInput(raw: string): string {
+  if (!raw) return '';
+  let s = raw.trim();
+
+  // Se o usuário digitou ponto no final (ex: "1585."), converte para vírgula decimal
+  if (s.endsWith('.')) {
+    s = s.slice(0, -1) + ',';
+  }
+
+  // Se tem vírgula, separa a parte inteira e a parte decimal
+  if (s.includes(',')) {
+    const parts = s.split(',');
+    const intDigits = parts[0].replace(/\D/g, '');
+    const decDigits = parts.slice(1).join('').replace(/\D/g, '').slice(0, 2);
+
+    let intFormatted = '0';
+    if (intDigits) {
+      intFormatted = Number(intDigits).toLocaleString('pt-BR');
+    }
+
+    return `${intFormatted},${decDigits}`;
+  }
+
+  // Se colou algo com ponto decimal tipo "1585.50" (mais de 3 dígitos antes do ponto e 1-2 depois)
+  if (s.includes('.')) {
+    const parts = s.split('.');
+    if (parts.length === 2 && parts[0].length > 3 && parts[1].length <= 2) {
+      const intDigits = parts[0].replace(/\D/g, '');
+      const decDigits = parts[1].replace(/\D/g, '').slice(0, 2);
+      const intFormatted = Number(intDigits).toLocaleString('pt-BR');
+      return `${intFormatted},${decDigits}`;
+    }
+  }
+
+  // Apenas dígitos inteiros: formata com pontos de milhar automaticamente
+  const digits = s.replace(/\D/g, '');
+  if (!digits) return '';
+  return Number(digits).toLocaleString('pt-BR');
+}
+
 /** Texto digitado ("1.234,56", "35.5", "40") -> centavos, ou null se inválido */
 export function parseBRL(input: string): number | null {
   let s = input.replace(/[R$\s]/g, '');

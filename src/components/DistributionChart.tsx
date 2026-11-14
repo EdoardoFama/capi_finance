@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { formatBRL } from '../format';
-import { IconArrowDownLeft, IconEdit, IconTrash } from './ui';
+import { IconArrowDownLeft, IconEdit, IconTrash, CollapseButton, useCollapsible } from './ui';
 
 export type DistributionItem = {
   id?: number;
@@ -41,6 +41,8 @@ type Props = {
   items: DistributionItem[];
   emptyMessage?: string;
   className?: string;
+  collapsible?: boolean;
+  storageKey?: string;
 };
 
 export default function DistributionChart({
@@ -48,8 +50,16 @@ export default function DistributionChart({
   subtitle,
   items,
   className = '',
+  collapsible = true,
+  storageKey,
 }: Props) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const fallbackKey = useMemo(() => {
+    return storageKey || `dist_${title.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+  }, [storageKey, title]);
+
+  const { isOpen, toggle } = useCollapsible(fallbackKey, true);
 
   // Mapeia todos os itens (não remove os com saldo 0 para permitir visualizar e gerenciar todas as corretoras)
   const allItems = useMemo(() => {
@@ -79,15 +89,27 @@ export default function DistributionChart({
   return (
     <div className={`rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-4 sm:p-5 shadow-xl shadow-black/40 backdrop-blur-sm ${className}`}>
       {/* Cabeçalho do Gráfico */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-3.5">
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm sm:text-base font-bold tracking-tight text-white">{title}</h3>
-            <span className="rounded-full bg-zinc-900 border border-white/[0.07] px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
-              {allItems.length} {allItems.length === 1 ? 'instituição' : 'instituições'}
-            </span>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 ${
+          isOpen ? 'border-b border-white/[0.06] pb-3.5' : ''
+        } ${collapsible ? 'cursor-pointer select-none group' : ''}`}
+        onClick={collapsible ? toggle : undefined}
+      >
+        <div className="flex items-center gap-2.5">
+          {collapsible && (
+            <CollapseButton isOpen={isOpen} onToggle={toggle} />
+          )}
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm sm:text-base font-bold tracking-tight text-white group-hover:text-emerald-300 transition">
+                {title}
+              </h3>
+              <span className="rounded-full bg-zinc-900 border border-white/[0.07] px-2 py-0.5 text-[10px] font-semibold text-zinc-400">
+                {allItems.length} {allItems.length === 1 ? 'instituição' : 'instituições'}
+              </span>
+            </div>
+            {subtitle && <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>}
           </div>
-          {subtitle && <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>}
         </div>
         <div className="text-right">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
@@ -104,6 +126,9 @@ export default function DistributionChart({
           </p>
         </div>
       </div>
+
+      {isOpen && (
+        <>
 
       {/* Barra Multicolorida Segmentada Interativa */}
       <div className="mt-4">
@@ -249,6 +274,8 @@ export default function DistributionChart({
           );
         })}
       </div>
+        </>
+      )}
     </div>
   );
 }

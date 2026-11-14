@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link } from 'react-router';
 import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS } from '../api';
 import { useMonth, useToast } from '../context';
-import { formatBRL, parseBRL, percent, currentMonth } from '../format';
+import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth } from '../format';
 import {
   Card,
+  CollapseButton,
   IconCreditCard,
   IconEdit,
   IconList,
@@ -15,6 +16,7 @@ import {
   ProgressBar,
   Spinner,
   textColor,
+  useCollapsible,
 } from '../components/ui';
 
 function AccountCard({
@@ -169,7 +171,7 @@ function AccountCard({
               inputMode="decimal"
               placeholder="0,00"
               value={val}
-              onChange={(e) => setVal(e.target.value)}
+              onChange={(e) => setVal(formatCurrencyInput(e.target.value))}
               onBlur={handleSave}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -192,6 +194,11 @@ export default function Home() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState('');
   const [fixedFilter, setFixedFilter] = useState<'all' | 'available' | 'done'>('all');
+
+  const heroCollapse = useCollapsible('home_hero', true);
+  const accountsCollapse = useCollapsible('home_accounts', true);
+  const fixedCatsCollapse = useCollapsible('home_fixed_cats', true);
+  const variableCatsCollapse = useCollapsible('home_variable_cats', true);
 
   const loadDashboard = useCallback(() => {
     let alive = true;
@@ -390,27 +397,34 @@ export default function Home() {
             <div className="relative flex flex-col gap-5">
               {/* Topo do Hero */}
               <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-emerald-300 uppercase">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Balanço Mensal
-                  </span>
-                  <p className="mt-2.5 text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                    Gasto Total Acumulado
-                  </p>
-                  <div className="mt-0.5 flex items-baseline gap-3">
-                    <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white tabular-nums">
-                      {formatBRL(data.total_spent_cents)}
-                    </h1>
-                    <span className={`rounded-lg px-2 py-0.5 text-xs font-extrabold border ${
-                      totalPct >= 100
-                        ? 'bg-red-500/15 text-red-300 border-red-500/30'
-                        : totalPct >= 80
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                        : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                    }`}>
-                      {totalPct}% da renda
+                <div className="flex items-start gap-3">
+                  <CollapseButton
+                    isOpen={heroCollapse.isOpen}
+                    onToggle={heroCollapse.toggle}
+                    className="mt-1"
+                  />
+                  <div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-bold tracking-wide text-emerald-300 uppercase">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Balanço Mensal
                     </span>
+                    <p className="mt-2 text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                      Gasto Total Acumulado
+                    </p>
+                    <div className="mt-0.5 flex items-baseline gap-3">
+                      <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white tabular-nums">
+                        {formatBRL(data.total_spent_cents)}
+                      </h1>
+                      <span className={`rounded-lg px-2 py-0.5 text-xs font-extrabold border ${
+                        totalPct >= 100
+                          ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                          : totalPct >= 80
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                          : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      }`}>
+                        {totalPct}% da renda
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -428,48 +442,52 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Barra de Progresso Geral */}
-              <div>
-                <ProgressBar
-                  spent={data.total_spent_cents}
-                  budget={data.total_income_cents || data.total_budget_cents}
-                  className="h-3"
-                />
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-                  <span>
-                    Fixos consumidos: <strong className="text-zinc-200">{formatBRL(data.fixed_spent_cents)}</strong> de {formatBRL(data.fixed_budget_cents)}
-                  </span>
-                  <span>
-                    Variáveis (Por Fora): <strong className="text-purple-300">{formatBRL(data.variable_spent_cents)}</strong>
-                  </span>
-                </div>
-              </div>
+              {heroCollapse.isOpen && (
+                <>
+                  {/* Barra de Progresso Geral */}
+                  <div>
+                    <ProgressBar
+                      spent={data.total_spent_cents}
+                      budget={data.total_income_cents || data.total_budget_cents}
+                      className="h-3"
+                    />
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+                      <span>
+                        Fixos consumidos: <strong className="text-zinc-200">{formatBRL(data.fixed_spent_cents)}</strong> de {formatBRL(data.fixed_budget_cents)}
+                      </span>
+                      <span>
+                        Variáveis (Por Fora): <strong className="text-purple-300">{formatBRL(data.variable_spent_cents)}</strong>
+                      </span>
+                    </div>
+                  </div>
 
-              {/* 3 Pilares do Orçamento */}
-              <div className="grid grid-cols-3 gap-2.5 border-t border-white/[0.07] pt-4">
-                <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
-                  <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Ganhos Previstos</p>
-                  <p className="mt-1 text-sm sm:text-lg font-extrabold text-emerald-400 tabular-nums">
-                    {formatBRL(data.total_income_cents)}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
-                  <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Teto Fixos</p>
-                  <p className="mt-1 text-sm sm:text-lg font-extrabold text-blue-300 tabular-nums">
-                    {formatBRL(data.fixed_budget_cents)}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
-                  <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Livre "Por Fora"</p>
-                  <p
-                    className={`mt-1 text-sm sm:text-lg font-extrabold tabular-nums ${
-                      data.por_fora_remaining_cents < 0 ? 'text-red-400' : 'text-purple-300'
-                    }`}
-                  >
-                    {formatBRL(data.por_fora_remaining_cents)}
-                  </p>
-                </div>
-              </div>
+                  {/* 3 Pilares do Orçamento */}
+                  <div className="grid grid-cols-3 gap-2.5 border-t border-white/[0.07] pt-4">
+                    <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
+                      <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Ganhos Previstos</p>
+                      <p className="mt-1 text-sm sm:text-lg font-extrabold text-emerald-400 tabular-nums">
+                        {formatBRL(data.total_income_cents)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
+                      <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Teto Fixos</p>
+                      <p className="mt-1 text-sm sm:text-lg font-extrabold text-blue-300 tabular-nums">
+                        {formatBRL(data.fixed_budget_cents)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-zinc-900/50 border border-white/[0.05] p-3">
+                      <p className="text-[10px] sm:text-xs font-medium text-zinc-400">Livre "Por Fora"</p>
+                      <p
+                        className={`mt-1 text-sm sm:text-lg font-extrabold tabular-nums ${
+                          data.por_fora_remaining_cents < 0 ? 'text-red-400' : 'text-purple-300'
+                        }`}
+                      >
+                        {formatBRL(data.por_fora_remaining_cents)}
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Ações Rápidas */}
               <div className="grid grid-cols-3 gap-2 pt-1">
@@ -501,12 +519,19 @@ export default function Home() {
           {/* ================= SALDO EM CONTA & BENEFÍCIOS ================= */}
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-2 cursor-pointer select-none group"
+                onClick={accountsCollapse.toggle}
+              >
+                <CollapseButton
+                  isOpen={accountsCollapse.isOpen}
+                  onToggle={accountsCollapse.toggle}
+                />
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
                   <IconWallet className="h-4 w-4" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold tracking-tight text-white">
+                  <h2 className="text-base font-bold tracking-tight text-white group-hover:text-emerald-300 transition">
                     Contas & Vale-Benefícios
                   </h2>
                   <p className="text-[11px] text-zinc-500">
@@ -533,321 +558,349 @@ export default function Home() {
               </div>
             </div>
 
-            {data.accounts.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-white/10 bg-zinc-950/60 p-6 text-center">
-                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 mb-2">
-                  <IconWallet className="h-5 w-5" />
+            {accountsCollapse.isOpen && (
+              data.accounts.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-zinc-950/60 p-6 text-center">
+                  <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 mb-2">
+                    <IconWallet className="h-5 w-5" />
+                  </div>
+                  <p className="text-sm font-bold text-zinc-200">Nenhuma conta cadastrada</p>
+                  <p className="text-xs text-zinc-500 mt-1 max-w-sm mx-auto">
+                    Cadastre suas contas correntes (ex: Nubank, Inter) ou vales (ex: Alelo, Pluxe, VR) para acompanhar seus saldos disponíveis.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddUserAccountOpen(true)}
+                    className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-4 py-2 text-xs font-extrabold text-black hover:bg-emerald-300 transition active:scale-95"
+                  >
+                    <IconPlus className="h-4 w-4" /> Cadastrar Conta
+                  </button>
                 </div>
-                <p className="text-sm font-bold text-zinc-200">Nenhuma conta cadastrada</p>
-                <p className="text-xs text-zinc-500 mt-1 max-w-sm mx-auto">
-                  Cadastre suas contas correntes (ex: Nubank, Inter) ou vales (ex: Alelo, Pluxe, VR) para acompanhar seus saldos disponíveis.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsAddUserAccountOpen(true)}
-                  className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-4 py-2 text-xs font-extrabold text-black hover:bg-emerald-300 transition active:scale-95"
-                >
-                  <IconPlus className="h-4 w-4" /> Cadastrar Conta
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {data.accounts.map((acc) => (
-                  <AccountCard
-                    key={acc.account_id}
-                    account={acc}
-                    month={month}
-                    onUpdate={handleAccountInitialUpdate}
-                    onEdit={() => {
-                      setEditingUserAccount(acc);
-                      setEditAccName(acc.name);
-                      setEditAccColor(acc.color || '#10b981');
-                      setIsEditUserAccountOpen(true);
-                    }}
-                    onDelete={() => handleDeleteUserAccount(acc)}
-                  />
-                ))}
-              </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {data.accounts.map((acc) => (
+                    <AccountCard
+                      key={acc.account_id}
+                      account={acc}
+                      month={month}
+                      onUpdate={handleAccountInitialUpdate}
+                      onEdit={() => {
+                        setEditingUserAccount(acc);
+                        setEditAccName(acc.name);
+                        setEditAccColor(acc.color || '#10b981');
+                        setIsEditUserAccountOpen(true);
+                      }}
+                      onDelete={() => handleDeleteUserAccount(acc)}
+                    />
+                  ))}
+                </div>
+              )
             )}
           </section>
 
           {/* ================= CATEGORIAS FIXAS ================= */}
           <section className="space-y-3 pt-1">
             <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
+              <div
+                className="cursor-pointer select-none group"
+                onClick={fixedCatsCollapse.toggle}
+              >
                 <div className="flex items-center gap-2">
+                  <CollapseButton
+                    isOpen={fixedCatsCollapse.isOpen}
+                    onToggle={fixedCatsCollapse.toggle}
+                  />
                   <span className="inline-block h-2.5 w-2.5 rounded-full bg-blue-500 ring-4 ring-blue-500/15" />
-                  <h2 className="text-base font-bold text-white">Categorias Fixas</h2>
+                  <h2 className="text-base font-bold text-white group-hover:text-blue-300 transition">
+                    Categorias Fixas
+                  </h2>
                   <span className="rounded-full bg-blue-500/15 px-2.5 py-0.5 text-[10px] font-bold text-blue-300 border border-blue-500/25">
                     {formatBRL(data.fixed_spent_cents)} / {formatBRL(data.fixed_budget_cents)}
                   </span>
                 </div>
-                <p className="text-xs text-zinc-500 mt-0.5">
+                <p className="text-xs text-zinc-500 mt-0.5 pl-9">
                   Despesas planejadas com meta ou teto mensal. Clique na categoria para ver o extrato filtrado.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                {/* Filtro rápido de Fixas */}
-                <div className="flex rounded-xl border border-white/[0.07] bg-zinc-950 p-0.5 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => setFixedFilter('all')}
-                    className={`rounded-lg px-2.5 py-1 font-semibold transition ${
-                      fixedFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Todas ({metrics.fixedCats.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFixedFilter('available')}
-                    className={`rounded-lg px-2.5 py-1 font-semibold transition ${
-                      fixedFilter === 'available' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Com saldo ({metrics.fixedCats.filter((c) => c.spent_cents < c.budget_cents).length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFixedFilter('done')}
-                    className={`rounded-lg px-2.5 py-1 font-semibold transition ${
-                      fixedFilter === 'done' ? 'bg-blue-500/20 text-blue-300' : 'text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Quitadas ({metrics.fixedCats.filter((c) => c.spent_cents >= c.budget_cents).length})
-                  </button>
-                </div>
+              {fixedCatsCollapse.isOpen && (
+                <div className="flex items-center gap-2">
+                  {/* Filtro rápido de Fixas */}
+                  <div className="flex rounded-xl border border-white/[0.07] bg-zinc-950 p-0.5 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setFixedFilter('all')}
+                      className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                        fixedFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Todas ({metrics.fixedCats.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFixedFilter('available')}
+                      className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                        fixedFilter === 'available' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Com saldo ({metrics.fixedCats.filter((c) => c.spent_cents < c.budget_cents).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFixedFilter('done')}
+                      className={`rounded-lg px-2.5 py-1 font-semibold transition ${
+                        fixedFilter === 'done' ? 'bg-blue-500/20 text-blue-300' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Quitadas ({metrics.fixedCats.filter((c) => c.spent_cents >= c.budget_cents).length})
+                    </button>
+                  </div>
 
-                <Link
-                  to="/orcamento"
-                  className="rounded-xl border border-white/[0.08] bg-zinc-900/70 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-                >
-                  Configurar
-                </Link>
-              </div>
+                  <Link
+                    to="/orcamento"
+                    className="rounded-xl border border-white/[0.08] bg-zinc-900/70 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+                  >
+                    Configurar
+                  </Link>
+                </div>
+              )}
             </div>
 
-            {displayedFixedCats.length === 0 ? (
-              <Card className="text-center text-sm text-zinc-500 py-8">
-                Nenhuma categoria fixa encontrada neste filtro.
-              </Card>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {displayedFixedCats.map((c) => {
-                  const pct = percent(c.spent_cents, c.budget_cents);
-                  const left = c.budget_cents - c.spent_cents;
-                  return (
-                    <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
-                      <Card className="h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99]">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <p className="truncate font-bold text-zinc-100 group-hover:text-emerald-300 transition">
-                                {c.name}
-                              </p>
-                              {c.count > 0 && (
-                                <span className="shrink-0 rounded-full bg-zinc-900 border border-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
-                                  {c.count}x
-                                </span>
+            {fixedCatsCollapse.isOpen && (
+              displayedFixedCats.length === 0 ? (
+                <Card className="text-center text-sm text-zinc-500 py-8">
+                  Nenhuma categoria fixa encontrada neste filtro.
+                </Card>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {displayedFixedCats.map((c) => {
+                    const pct = percent(c.spent_cents, c.budget_cents);
+                    const left = c.budget_cents - c.spent_cents;
+                    return (
+                      <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
+                        <Card className="h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99]">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="truncate font-bold text-zinc-100 group-hover:text-emerald-300 transition">
+                                  {c.name}
+                                </p>
+                                {c.count > 0 && (
+                                  <span className="shrink-0 rounded-full bg-zinc-900 border border-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
+                                    {c.count}x
+                                  </span>
+                                )}
+                                <Link
+                                  to={`/lancar?categoria=${c.id}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
+                                  title={`Lançar gasto em ${c.name}`}
+                                >
+                                  <IconPlus className="h-3.5 w-3.5" />
+                                </Link>
+                              </div>
+                              {c.note && (
+                                <p className="truncate text-[11px] text-zinc-500 mt-0.5" title={c.note}>
+                                  {c.note}
+                                </p>
                               )}
-                              <Link
-                                to={`/lancar?categoria=${c.id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
-                                title={`Lançar gasto em ${c.name}`}
-                              >
-                                <IconPlus className="h-3.5 w-3.5" />
-                              </Link>
                             </div>
-                            {c.note && (
-                              <p className="truncate text-[11px] text-zinc-500 mt-0.5" title={c.note}>
-                                {c.note}
-                              </p>
-                            )}
+                            <span
+                              className={`shrink-0 rounded-lg px-2 py-0.5 text-xs font-extrabold tabular-nums ${textColor(
+                                pct,
+                              )} bg-zinc-900/90 border border-white/[0.05]`}
+                            >
+                              {pct}%
+                            </span>
                           </div>
-                          <span
-                            className={`shrink-0 rounded-lg px-2 py-0.5 text-xs font-extrabold tabular-nums ${textColor(
-                              pct,
-                            )} bg-zinc-900/90 border border-white/[0.05]`}
-                          >
-                            {pct}%
-                          </span>
-                        </div>
 
-                        <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2" />
+                          <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2" />
 
-                        <div className="mt-2.5 flex items-center justify-between text-xs">
-                          <span className="text-zinc-300 font-semibold tabular-nums">
-                            {formatBRL(c.spent_cents)}{' '}
-                            <span className="text-zinc-500 font-normal">/ {formatBRL(c.budget_cents)}</span>
-                          </span>
-                          <span
-                            className={`font-semibold tabular-nums ${
-                              left < 0 ? 'text-red-400' : left === 0 ? 'text-zinc-500' : 'text-emerald-400/90'
-                            }`}
-                          >
-                            {left < 0
-                              ? `Excedeu ${formatBRL(-left)}`
-                              : left === 0
-                              ? 'Meta atingida ✓'
-                              : `Resta ${formatBRL(left)}`}
-                          </span>
-                        </div>
-                      </Card>
-                    </Link>
-                  );
-                })}
-              </div>
+                          <div className="mt-2.5 flex items-center justify-between text-xs">
+                            <span className="text-zinc-300 font-semibold tabular-nums">
+                              {formatBRL(c.spent_cents)}{' '}
+                              <span className="text-zinc-500 font-normal">/ {formatBRL(c.budget_cents)}</span>
+                            </span>
+                            <span
+                              className={`font-semibold tabular-nums ${
+                                left < 0 ? 'text-red-400' : left === 0 ? 'text-zinc-500' : 'text-emerald-400/90'
+                              }`}
+                            >
+                              {left < 0
+                                ? `Excedeu ${formatBRL(-left)}`
+                                : left === 0
+                                ? 'Meta atingida ✓'
+                                : `Resta ${formatBRL(left)}`}
+                            </span>
+                          </div>
+                        </Card>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )
             )}
           </section>
 
           {/* ================= CATEGORIAS VARIÁVEIS (POR FORA) ================= */}
           <section className="space-y-3 pt-2">
-            <div className="flex items-center justify-between">
+            <div
+              className="flex items-center justify-between cursor-pointer select-none group"
+              onClick={variableCatsCollapse.toggle}
+            >
               <div>
                 <div className="flex items-center gap-2">
+                  <CollapseButton
+                    isOpen={variableCatsCollapse.isOpen}
+                    onToggle={variableCatsCollapse.toggle}
+                  />
                   <span className="inline-block h-2.5 w-2.5 rounded-full bg-purple-500 ring-4 ring-purple-500/15" />
-                  <h2 className="text-base font-bold text-white">Categorias Variáveis ("Por Fora")</h2>
+                  <h2 className="text-base font-bold text-white group-hover:text-purple-300 transition">
+                    Categorias Variáveis ("Por Fora")
+                  </h2>
                   <span className="rounded-full bg-purple-500/15 px-2.5 py-0.5 text-[10px] font-bold text-purple-300 border border-purple-500/25">
                     Saldo Livre
                   </span>
                 </div>
-                <p className="text-xs text-zinc-500 mt-0.5">
+                <p className="text-xs text-zinc-500 mt-0.5 pl-9">
                   Despesas flexíveis que consomem o saldo livre. Clique para ver o extrato filtrado.
                 </p>
               </div>
             </div>
 
-            {/* Card Resumo do 'Por Fora' */}
-            <div className="relative overflow-hidden rounded-2xl border border-purple-500/30 bg-gradient-to-br from-zinc-950 via-zinc-950 to-purple-950/30 p-5 shadow-xl">
-              <div className="pointer-events-none absolute -right-10 -top-10 h-36 w-36 rounded-full bg-purple-600/10 blur-2xl" />
+            {variableCatsCollapse.isOpen && (
+              <>
+                {/* Card Resumo do 'Por Fora' */}
+                <div className="relative overflow-hidden rounded-2xl border border-purple-500/30 bg-gradient-to-br from-zinc-950 via-zinc-950 to-purple-950/30 p-5 shadow-xl">
+                  <div className="pointer-events-none absolute -right-10 -top-10 h-36 w-36 rounded-full bg-purple-600/10 blur-2xl" />
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-white/[0.06] pb-4">
-                <div>
-                  <p className="text-[11px] text-purple-300 uppercase font-bold tracking-wider">
-                    Orçamento "Por Fora"
-                  </p>
-                  <p className="text-2xl font-extrabold tracking-tight text-white mt-0.5 tabular-nums">
-                    {formatBRL(data.por_fora_budget_cents)}
-                  </p>
-                  <p className="text-[11px] text-zinc-500 mt-0.5">Ganhos − Fixos previstos</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-white/[0.06] pb-4">
+                    <div>
+                      <p className="text-[11px] text-purple-300 uppercase font-bold tracking-wider">
+                        Orçamento "Por Fora"
+                      </p>
+                      <p className="text-2xl font-extrabold tracking-tight text-white mt-0.5 tabular-nums">
+                        {formatBRL(data.por_fora_budget_cents)}
+                      </p>
+                      <p className="text-[11px] text-zinc-500 mt-0.5">Ganhos − Fixos previstos</p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] text-zinc-400 uppercase font-bold tracking-wider">
+                        Já Consumido
+                      </p>
+                      <p className="text-2xl font-extrabold text-purple-300 mt-0.5 tabular-nums">
+                        {formatBRL(data.por_fora_spent_cents)}
+                      </p>
+                      <p className="text-[11px] text-zinc-500 mt-0.5">
+                        {data.por_fora_budget_cents > 0
+                          ? `${percent(data.por_fora_spent_cents, data.por_fora_budget_cents)}% do saldo livre`
+                          : 'Sem margem'}
+                      </p>
+                    </div>
+
+                    <div className="sm:text-right">
+                      <p className="text-[11px] text-zinc-400 uppercase font-bold tracking-wider">
+                        Saldo Livre Restante
+                      </p>
+                      <p
+                        className={`text-2xl font-extrabold mt-0.5 tabular-nums ${
+                          data.por_fora_remaining_cents < 0 ? 'text-red-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {formatBRL(data.por_fora_remaining_cents)}
+                      </p>
+                      {metrics.dailyPorFora > 0 && (
+                        <p className="text-[11px] text-emerald-400/80 mt-0.5">
+                          ~{formatBRL(metrics.dailyPorFora)}/dia ({metrics.daysLeft}d restantes)
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Barra de Progresso do Por Fora */}
+                  <div className="mt-4">
+                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-zinc-900 ring-1 ring-inset ring-white/[0.06]">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          data.por_fora_remaining_cents < 0
+                            ? 'bg-gradient-to-r from-red-500 to-rose-500'
+                            : 'bg-gradient-to-r from-purple-500 to-indigo-400'
+                        }`}
+                        style={{
+                          width: `${
+                            data.por_fora_budget_cents > 0
+                              ? Math.min(100, Math.round((data.por_fora_spent_cents / data.por_fora_budget_cents) * 100))
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div>
-                  <p className="text-[11px] text-zinc-400 uppercase font-bold tracking-wider">
-                    Já Consumido
-                  </p>
-                  <p className="text-2xl font-extrabold text-purple-300 mt-0.5 tabular-nums">
-                    {formatBRL(data.por_fora_spent_cents)}
-                  </p>
-                  <p className="text-[11px] text-zinc-500 mt-0.5">
-                    {data.por_fora_budget_cents > 0
-                      ? `${percent(data.por_fora_spent_cents, data.por_fora_budget_cents)}% do saldo livre`
-                      : 'Sem margem'}
-                  </p>
-                </div>
-
-                <div className="sm:text-right">
-                  <p className="text-[11px] text-zinc-400 uppercase font-bold tracking-wider">
-                    Saldo Livre Restante
-                  </p>
-                  <p
-                    className={`text-2xl font-extrabold mt-0.5 tabular-nums ${
-                      data.por_fora_remaining_cents < 0 ? 'text-red-400' : 'text-emerald-400'
-                    }`}
-                  >
-                    {formatBRL(data.por_fora_remaining_cents)}
-                  </p>
-                  {metrics.dailyPorFora > 0 && (
-                    <p className="text-[11px] text-emerald-400/80 mt-0.5">
-                      ~{formatBRL(metrics.dailyPorFora)}/dia ({metrics.daysLeft}d restantes)
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Barra de Progresso do Por Fora */}
-              <div className="mt-4">
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-zinc-900 ring-1 ring-inset ring-white/[0.06]">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      data.por_fora_remaining_cents < 0
-                        ? 'bg-gradient-to-r from-red-500 to-rose-500'
-                        : 'bg-gradient-to-r from-purple-500 to-indigo-400'
-                    }`}
-                    style={{
-                      width: `${
-                        data.por_fora_budget_cents > 0
-                          ? Math.min(100, Math.round((data.por_fora_spent_cents / data.por_fora_budget_cents) * 100))
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Grid das Categorias Variáveis com o consumo de cada uma */}
-            {metrics.variableCats.length === 0 ? (
-              <Card className="text-center text-sm text-zinc-500">
-                Nenhuma categoria variável cadastrada.{' '}
-                <Link to="/orcamento" className="text-purple-400 hover:underline">
-                  Criar categoria variável
-                </Link>
-                .
-              </Card>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {metrics.variableCats.map((c) => {
-                  const sharePct =
-                    data.por_fora_budget_cents > 0
-                      ? Math.round((c.spent_cents / data.por_fora_budget_cents) * 100)
-                      : 0;
-                  return (
-                    <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
-                      <Card className="h-full transition-all duration-200 hover:border-purple-500/40 hover:bg-zinc-900/50 active:scale-[0.99]">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
-                                {c.name}
-                              </p>
-                              <Link
-                                to={`/lancar?categoria=${c.id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-purple-400 transition"
-                                title={`Lançar gasto em ${c.name}`}
-                              >
-                                <IconPlus className="h-3.5 w-3.5" />
-                              </Link>
-                            </div>
-                            <p className="text-[11px] text-zinc-500">
-                              {c.count} {c.count === 1 ? 'lançamento' : 'lançamentos'}
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-extrabold text-base text-purple-300 tabular-nums">
-                              {formatBRL(c.spent_cents)}
-                            </p>
-                            {data.por_fora_budget_cents > 0 && c.spent_cents > 0 && (
-                              <p className="text-[10px] font-semibold text-purple-400/80">
-                                {sharePct}% do Por Fora
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-900">
-                          <div
-                            className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-500 rounded-full transition-all duration-500"
-                            style={{ width: `${Math.min(100, sharePct)}%` }}
-                          />
-                        </div>
-                      </Card>
+                {/* Grid das Categorias Variáveis com o consumo de cada uma */}
+                {metrics.variableCats.length === 0 ? (
+                  <Card className="text-center text-sm text-zinc-500">
+                    Nenhuma categoria variável cadastrada.{' '}
+                    <Link to="/orcamento" className="text-purple-400 hover:underline">
+                      Criar categoria variável
                     </Link>
-                  );
-                })}
-              </div>
+                    .
+                  </Card>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {metrics.variableCats.map((c) => {
+                      const sharePct =
+                        data.por_fora_budget_cents > 0
+                          ? Math.round((c.spent_cents / data.por_fora_budget_cents) * 100)
+                          : 0;
+                      return (
+                        <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
+                          <Card className="h-full transition-all duration-200 hover:border-purple-500/40 hover:bg-zinc-900/50 active:scale-[0.99]">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
+                                    {c.name}
+                                  </p>
+                                  <Link
+                                    to={`/lancar?categoria=${c.id}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-purple-400 transition"
+                                    title={`Lançar gasto em ${c.name}`}
+                                  >
+                                    <IconPlus className="h-3.5 w-3.5" />
+                                  </Link>
+                                </div>
+                                <p className="text-[11px] text-zinc-500">
+                                  {c.count} {c.count === 1 ? 'lançamento' : 'lançamentos'}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-extrabold text-base text-purple-300 tabular-nums">
+                                  {formatBRL(c.spent_cents)}
+                                </p>
+                                {data.por_fora_budget_cents > 0 && c.spent_cents > 0 && (
+                                  <p className="text-[10px] font-semibold text-purple-400/80">
+                                    {sharePct}% do Por Fora
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-900">
+                              <div
+                                className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-500 rounded-full transition-all duration-500"
+                                style={{ width: `${Math.min(100, sharePct)}%` }}
+                              />
+                            </div>
+                          </Card>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </section>
         </>
@@ -882,7 +935,7 @@ export default function Home() {
                   placeholder="0,00"
                   inputMode="decimal"
                   value={newAccBalance}
-                  onChange={(e) => setNewAccBalance(e.target.value)}
+                  onChange={(e) => setNewAccBalance(formatCurrencyInput(e.target.value))}
                   className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
                 />
               </div>

@@ -10,9 +10,10 @@ import {
   ACCOUNT_DEFINITIONS,
 } from '../api';
 import { useMonth, useToast } from '../context';
-import { dayLabel, formatBRL, parseBRL, percent, todayISO } from '../format';
+import { dayLabel, formatBRL, formatCurrencyInput, parseBRL, percent, todayISO } from '../format';
 import {
   Card,
+  CollapseButton,
   IconEdit,
   IconPlus,
   IconTrash,
@@ -22,6 +23,7 @@ import {
   ProgressBar,
   Spinner,
   textColor,
+  useCollapsible,
 } from '../components/ui';
 import EditExpenseModal from '../components/EditExpenseModal';
 
@@ -72,6 +74,7 @@ export default function Expenses() {
 
   // Filtro da lista de lançamentos
   const [listFilter, setListFilter] = useState<'all' | 'expense' | 'inflow'>('all');
+  const recentCollapse = useCollapsible('expenses_recent', true);
 
   const load = useCallback(async () => {
     const [d, e, inf] = await Promise.all([
@@ -365,7 +368,7 @@ export default function Expenses() {
                 <span className="text-2xl font-bold text-emerald-400 select-none">R$</span>
                 <input
                   value={inflowAmount}
-                  onChange={(e) => setInflowAmount(e.target.value)}
+                  onChange={(e) => setInflowAmount(formatCurrencyInput(e.target.value))}
                   inputMode="decimal"
                   placeholder="0,00"
                   className="w-full bg-transparent py-1 text-3xl sm:text-4xl font-black tracking-tight text-white tabular-nums outline-none placeholder:text-zinc-700"
@@ -501,7 +504,7 @@ export default function Expenses() {
                 <span className="text-2xl font-bold text-emerald-400 select-none">R$</span>
                 <input
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
                   inputMode="decimal"
                   placeholder="0,00"
                   className="w-full bg-transparent py-1 text-3xl sm:text-4xl font-black tracking-tight text-white tabular-nums outline-none placeholder:text-zinc-700"
@@ -855,21 +858,33 @@ export default function Expenses() {
           ========================================================= */}
       <div className="pt-3 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-bold text-white">Lançamentos do Mês</h2>
-            <div className="flex items-center gap-3 text-xs text-zinc-400 mt-0.5">
-              <span>
-                Saídas: <strong className="text-zinc-200">{formatBRL(totalSpent)}</strong>
-              </span>
-              <span>•</span>
-              <span>
-                Entradas: <strong className="text-emerald-400">+{formatBRL(totalReceived)}</strong>
-              </span>
+          <div
+            className="flex items-center gap-2.5 cursor-pointer select-none group"
+            onClick={recentCollapse.toggle}
+          >
+            <CollapseButton
+              isOpen={recentCollapse.isOpen}
+              onToggle={recentCollapse.toggle}
+            />
+            <div>
+              <h2 className="text-base font-bold text-white group-hover:text-emerald-300 transition">
+                Lançamentos do Mês
+              </h2>
+              <div className="flex items-center gap-3 text-xs text-zinc-400 mt-0.5">
+                <span>
+                  Saídas: <strong className="text-zinc-200">{formatBRL(totalSpent)}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Entradas: <strong className="text-emerald-400">+{formatBRL(totalReceived)}</strong>
+                </span>
+              </div>
             </div>
           </div>
 
           {/* Filtro Todos / Saídas / Entradas */}
-          <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
+          {recentCollapse.isOpen && (
+            <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
             <button
               type="button"
               onClick={() => setListFilter('all')}
@@ -898,9 +913,12 @@ export default function Expenses() {
               Entradas ({inflows?.length ?? 0})
             </button>
           </div>
+          )}
         </div>
 
-        <MonthPicker />
+        {recentCollapse.isOpen && (
+          <>
+            <MonthPicker />
 
         {!expenses || !inflows ? (
           <Spinner />
@@ -1032,6 +1050,8 @@ export default function Expenses() {
               </div>
             ))}
           </div>
+        )}
+          </>
         )}
       </div>
 

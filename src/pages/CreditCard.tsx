@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type Category, type CreditCardInvoice, type Expense } from '../api';
 import { useMonth, useToast } from '../context';
-import { centsToInput, dayLabel, formatBRL, monthLabel, parseBRL } from '../format';
+import { centsToInput, dayLabel, formatBRL, formatCurrencyInput, monthLabel, parseBRL } from '../format';
 import {
   Card,
+  CollapseButton,
   IconCreditCard,
   IconEdit,
   IconPlus,
@@ -13,6 +14,7 @@ import {
   MonthPicker,
   PageTitle,
   Spinner,
+  useCollapsible,
 } from '../components/ui';
 import EditExpenseModal from '../components/EditExpenseModal';
 import DistributionChart from '../components/DistributionChart';
@@ -31,6 +33,9 @@ export default function CreditCard() {
   const [showPayModal, setShowPayModal] = useState<boolean>(false);
   const [payInput, setPayInput] = useState<string>('');
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+
+  const heroCollapse = useCollapsible('card_hero', true);
+  const expensesCollapse = useCollapsible('card_expenses', true);
 
   const load = useCallback(async () => {
     try {
@@ -240,8 +245,17 @@ export default function CreditCard() {
             <div className="pointer-events-none absolute -right-12 -top-12 h-52 w-52 rounded-full bg-purple-600/20 blur-3xl" />
             <div className="pointer-events-none absolute -left-12 -bottom-12 h-44 w-44 rounded-full bg-indigo-600/10 blur-3xl" />
 
-            <div className="relative flex flex-wrap items-start justify-between gap-3">
+            <div
+              className={`relative flex flex-wrap items-start justify-between gap-3 ${
+                heroCollapse.isOpen ? '' : 'select-none cursor-pointer group'
+              }`}
+              onClick={!heroCollapse.isOpen ? heroCollapse.toggle : undefined}
+            >
               <div className="flex items-center gap-3">
+                <CollapseButton
+                  isOpen={heroCollapse.isOpen}
+                  onToggle={heroCollapse.toggle}
+                />
                 <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-purple-500/20 text-purple-300 border border-purple-400/30 shadow-inner">
                   <IconCreditCard className="h-6 w-6" />
                 </div>
@@ -249,190 +263,206 @@ export default function CreditCard() {
                   <span className="text-[10px] font-extrabold tracking-widest text-purple-300 uppercase">
                     Nubank Mastercard
                   </span>
-                  <h2 className="text-lg sm:text-xl font-extrabold text-white capitalize">
+                  <h2 className="text-lg sm:text-xl font-extrabold text-white capitalize group-hover:text-purple-300 transition">
                     Fatura de {monthLabel(month)}
                   </h2>
                 </div>
               </div>
 
-              {/* Status da Fatura */}
-              {isPaid ? (
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/35 bg-emerald-500/15 px-3.5 py-1 text-xs font-bold text-emerald-300">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Fatura 100% Paga
-                </div>
-              ) : isPartial ? (
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/35 bg-sky-500/15 px-3.5 py-1 text-xs font-bold text-sky-300">
-                  <span className="h-2 w-2 rounded-full bg-sky-400 animate-pulse" />
-                  Paga Parcialmente ({formatBRL(paidAmount)})
-                </div>
-              ) : (
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/35 bg-amber-500/15 px-3.5 py-1 text-xs font-bold text-amber-300">
-                  <span className="h-2 w-2 rounded-full bg-amber-400" />
-                  Fatura em Aberto
-                </div>
-              )}
-            </div>
-
-            {/* Painel com 4 Cards: Total da Fatura, Pago, Restante, Saldo Nubank */}
-            <div className="relative mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 border-t border-white/[0.08] pt-5">
-              {/* 1. Total da Fatura (Nunca zera ao pagar) */}
-              <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
-                <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Total da Fatura
-                </p>
-                <p className="mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-white tabular-nums">
-                  {formatBRL(invoiceTotal)}
-                </p>
-                <p className="mt-1 text-xs text-zinc-400">
-                  {invoice?.count ?? 0}{' '}
-                  {invoice?.count === 1 ? 'compra registrada' : 'compras registradas'}
-                </p>
-              </div>
-
-              {/* 2. Valor Pago */}
-              <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
-                <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Valor Pago
-                </p>
-                <p
-                  className={`mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight tabular-nums ${
-                    paidAmount > 0 ? 'text-emerald-400' : 'text-zinc-500'
-                  }`}
-                >
-                  {formatBRL(paidAmount)}
-                </p>
-                <p className="mt-1 text-xs text-zinc-400">
-                  {paidAmount > 0
-                    ? isPaid
-                      ? '100% liquidado'
-                      : 'Abatimento parcial'
-                    : 'Nenhum pagamento'}
-                </p>
-              </div>
-
-              {/* 3. Restante a Pagar */}
-              <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
-                <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Restante a Pagar
-                </p>
-                <p
-                  className={`mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight tabular-nums ${
-                    remainingAmount === 0 && invoiceTotal > 0
-                      ? 'text-emerald-400'
-                      : remainingAmount > 0
-                      ? 'text-amber-300'
-                      : 'text-zinc-500'
-                  }`}
-                >
-                  {formatBRL(remainingAmount)}
-                </p>
-                <p className="mt-1 text-xs text-zinc-400">
-                  {remainingAmount === 0 && invoiceTotal > 0
-                    ? 'Fatura quitada ✓'
-                    : remainingAmount > 0
-                    ? 'Aguardando quitação'
-                    : 'Sem compras'}
-                </p>
-              </div>
-
-              {/* 4. Saldo Conta Nubank */}
-              <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
-                <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-                  Saldo Conta Nubank
-                </p>
-                <p className="mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-purple-300 tabular-nums">
-                  {formatBRL(currentNubankBalance)}
-                </p>
-                <p className="mt-1 text-xs text-zinc-400">
-                  {currentNubankBalance >= remainingAmount && remainingAmount > 0
-                    ? `Cobre o restante (sobra ${formatBRL(currentNubankBalance - remainingAmount)})`
-                    : remainingAmount === 0
-                    ? 'Fatura quitada'
-                    : remainingAmount > 0
-                    ? `Faltam ${formatBRL(remainingAmount - currentNubankBalance)}`
-                    : 'Sem débitos'}
-                </p>
+              {/* Status da Fatura e Totais quando retraído */}
+              <div className="flex items-center gap-3">
+                {!heroCollapse.isOpen && (
+                  <div className="text-right">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                      Restante
+                    </span>
+                    <span className="text-sm font-extrabold text-white tabular-nums">
+                      {formatBRL(remainingAmount)}
+                    </span>
+                  </div>
+                )}
+                {isPaid ? (
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/35 bg-emerald-500/15 px-3.5 py-1 text-xs font-bold text-emerald-300">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    Fatura 100% Paga
+                  </div>
+                ) : isPartial ? (
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/35 bg-sky-500/15 px-3.5 py-1 text-xs font-bold text-sky-300">
+                    <span className="h-2 w-2 rounded-full bg-sky-400 animate-pulse" />
+                    Paga Parcialmente ({formatBRL(paidAmount)})
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/35 bg-amber-500/15 px-3.5 py-1 text-xs font-bold text-amber-300">
+                    <span className="h-2 w-2 rounded-full bg-amber-400" />
+                    Fatura em Aberto
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Sub-painel: Compras à vista vs Compras parceladas */}
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-zinc-950/60 px-4 py-2.5 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="text-zinc-400">Compras à vista (1x):</span>
-                <span className="font-bold text-zinc-200 tabular-nums">
-                  {formatBRL(invoiceStats.singleTotal)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-purple-300">Compras parceladas:</span>
-                <span className="font-bold text-purple-300 tabular-nums">
-                  {formatBRL(invoiceStats.installmentsTotal)}
-                </span>
-              </div>
-            </div>
+            {heroCollapse.isOpen && (
+              <>
+                {/* Painel com 4 Cards: Total da Fatura, Pago, Restante, Saldo Nubank */}
+                <div className="relative mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 border-t border-white/[0.08] pt-5">
+                  {/* 1. Total da Fatura (Nunca zera ao pagar) */}
+                  <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
+                    <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Total da Fatura
+                    </p>
+                    <p className="mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-white tabular-nums">
+                      {formatBRL(invoiceTotal)}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {invoice?.count ?? 0}{' '}
+                      {invoice?.count === 1 ? 'compra registrada' : 'compras registradas'}
+                    </p>
+                  </div>
 
-            {/* Rodapé de Ação da Fatura */}
-            <div className="relative mt-5 pt-4 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-3">
-              {isPaid ? (
-                <div className="flex w-full items-center justify-between flex-wrap gap-2">
-                  <span className="text-xs text-emerald-300/90 font-medium">
-                    ✓{' '}
-                    {invoice?.paid_at
-                      ? `Liquidada em ${new Date(invoice.paid_at).toLocaleDateString('pt-BR')}`
-                      : 'Fatura quitada'}{' '}
-                    • Total de {formatBRL(paidAmount)} abatido da conta Nubank
-                  </span>
-                  <button
-                    onClick={handleReopenInvoice}
-                    disabled={paying}
-                    className="rounded-xl border border-white/[0.08] bg-zinc-900/80 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
-                  >
-                    Desfazer pagamento
-                  </button>
+                  {/* 2. Valor Pago */}
+                  <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
+                    <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Valor Pago
+                    </p>
+                    <p
+                      className={`mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight tabular-nums ${
+                        paidAmount > 0 ? 'text-emerald-400' : 'text-zinc-500'
+                      }`}
+                    >
+                      {formatBRL(paidAmount)}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {paidAmount > 0
+                        ? isPaid
+                          ? '100% liquidado'
+                          : 'Abatimento parcial'
+                        : 'Nenhum pagamento'}
+                    </p>
+                  </div>
+
+                  {/* 3. Restante a Pagar */}
+                  <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
+                    <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Restante a Pagar
+                    </p>
+                    <p
+                      className={`mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight tabular-nums ${
+                        remainingAmount === 0 && invoiceTotal > 0
+                          ? 'text-emerald-400'
+                          : remainingAmount > 0
+                          ? 'text-amber-300'
+                          : 'text-zinc-500'
+                      }`}
+                    >
+                      {formatBRL(remainingAmount)}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {remainingAmount === 0 && invoiceTotal > 0
+                        ? 'Fatura quitada ✓'
+                        : remainingAmount > 0
+                        ? 'Aguardando quitação'
+                        : 'Sem compras'}
+                    </p>
+                  </div>
+
+                  {/* 4. Saldo Conta Nubank */}
+                  <div className="rounded-2xl border border-white/[0.06] bg-black/40 p-3.5 sm:p-4">
+                    <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                      Saldo Conta Nubank
+                    </p>
+                    <p className="mt-1 text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-purple-300 tabular-nums">
+                      {formatBRL(currentNubankBalance)}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {currentNubankBalance >= remainingAmount && remainingAmount > 0
+                        ? `Cobre o restante (sobra ${formatBRL(currentNubankBalance - remainingAmount)})`
+                        : remainingAmount === 0
+                        ? 'Fatura quitada'
+                        : remainingAmount > 0
+                        ? `Faltam ${formatBRL(remainingAmount - currentNubankBalance)}`
+                        : 'Sem débitos'}
+                    </p>
+                  </div>
                 </div>
-              ) : isPartial ? (
-                <div className="flex w-full items-center justify-between flex-wrap gap-3">
-                  <div className="text-xs text-zinc-300">
-                    <span className="font-semibold text-sky-300">Pagamento parcial:</span>{' '}
-                    {formatBRL(paidAmount)} já pagos. Restam{' '}
-                    <strong className="text-amber-300">{formatBRL(remainingAmount)}</strong> a
-                    quitar.
+
+                {/* Sub-painel: Compras à vista vs Compras parceladas */}
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-zinc-950/60 px-4 py-2.5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-400">Compras à vista (1x):</span>
+                    <span className="font-bold text-zinc-200 tabular-nums">
+                      {formatBRL(invoiceStats.singleTotal)}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleReopenInvoice}
-                      disabled={paying}
-                      className="rounded-xl border border-white/[0.08] bg-zinc-900/80 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
-                    >
-                      Desfazer pagamentos
-                    </button>
-                    <button
-                      onClick={handleOpenPayModal}
-                      disabled={paying}
-                      className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 px-4 py-2 text-xs sm:text-sm font-extrabold text-white shadow-lg shadow-purple-600/30 transition hover:brightness-110 disabled:opacity-40"
-                    >
-                      <IconCreditCard className="h-4 w-4" />
-                      Pagar Restante ({formatBRL(remainingAmount)})
-                    </button>
+                    <span className="text-purple-300">Compras parceladas:</span>
+                    <span className="font-bold text-purple-300 tabular-nums">
+                      {formatBRL(invoiceStats.installmentsTotal)}
+                    </span>
                   </div>
                 </div>
-              ) : (
-                <div className="flex w-full items-center justify-between flex-wrap gap-3">
-                  <span className="text-xs text-zinc-400">
-                    Ao pagar a fatura, o valor é deduzido automaticamente do seu saldo da conta Nubank.
-                  </span>
-                  <button
-                    onClick={handleOpenPayModal}
-                    disabled={invoiceTotal <= 0 || paying}
-                    className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 px-5 py-2.5 text-xs sm:text-sm font-extrabold text-white shadow-lg shadow-purple-600/30 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <IconCreditCard className="h-4 w-4" />
-                    Pagar Fatura
-                  </button>
+
+                {/* Rodapé de Ação da Fatura */}
+                <div className="relative mt-5 pt-4 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-3">
+                  {isPaid ? (
+                    <div className="flex w-full items-center justify-between flex-wrap gap-2">
+                      <span className="text-xs text-emerald-300/90 font-medium">
+                        ✓{' '}
+                        {invoice?.paid_at
+                          ? `Liquidada em ${new Date(invoice.paid_at).toLocaleDateString('pt-BR')}`
+                          : 'Fatura quitada'}{' '}
+                        • Total de {formatBRL(paidAmount)} abatido da conta Nubank
+                      </span>
+                      <button
+                        onClick={handleReopenInvoice}
+                        disabled={paying}
+                        className="rounded-xl border border-white/[0.08] bg-zinc-900/80 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+                      >
+                        Desfazer pagamento
+                      </button>
+                    </div>
+                  ) : isPartial ? (
+                    <div className="flex w-full items-center justify-between flex-wrap gap-3">
+                      <div className="text-xs text-zinc-300">
+                        <span className="font-semibold text-sky-300">Pagamento parcial:</span>{' '}
+                        {formatBRL(paidAmount)} já pagos. Restam{' '}
+                        <strong className="text-amber-300">{formatBRL(remainingAmount)}</strong> a
+                        quitar.
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleReopenInvoice}
+                          disabled={paying}
+                          className="rounded-xl border border-white/[0.08] bg-zinc-900/80 px-3 py-2 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition disabled:opacity-50"
+                        >
+                          Desfazer pagamentos
+                        </button>
+                        <button
+                          onClick={handleOpenPayModal}
+                          disabled={paying}
+                          className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 px-4 py-2 text-xs sm:text-sm font-extrabold text-white shadow-lg shadow-purple-600/30 transition hover:brightness-110 disabled:opacity-40"
+                        >
+                          <IconCreditCard className="h-4 w-4" />
+                          Pagar Restante ({formatBRL(remainingAmount)})
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex w-full items-center justify-between flex-wrap gap-3">
+                      <span className="text-xs text-zinc-400">
+                        Ao pagar a fatura, o valor é deduzido automaticamente do seu saldo da conta Nubank.
+                      </span>
+                      <button
+                        onClick={handleOpenPayModal}
+                        disabled={invoiceTotal <= 0 || paying}
+                        className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 px-5 py-2.5 text-xs sm:text-sm font-extrabold text-white shadow-lg shadow-purple-600/30 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <IconCreditCard className="h-4 w-4" />
+                        Pagar Fatura
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           {/* Modal de Pagamento de Fatura (Parcial ou Total) */}
@@ -511,7 +541,7 @@ export default function CreditCard() {
                       type="text"
                       inputMode="decimal"
                       value={payInput}
-                      onChange={(e) => setPayInput(e.target.value)}
+                      onChange={(e) => setPayInput(formatCurrencyInput(e.target.value))}
                       placeholder="0,00"
                       className="w-full rounded-xl border border-white/[0.1] bg-zinc-900 py-3 pl-11 pr-4 text-lg font-bold text-white placeholder:text-zinc-600 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
                     />
@@ -615,174 +645,195 @@ export default function CreditCard() {
               title="Distribuição da Fatura por Categoria"
               subtitle="Veja para quais categorias estão indo os gastos do seu cartão neste mês"
               items={invoiceCategoryDistribution}
+              storageKey="card_distribution"
             />
           )}
 
           {/* Filtros da lista */}
           <Card className="space-y-3.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
-              <div>
-                <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
-                  Lançamentos Filtrados
-                </p>
-                <p className="text-xl font-extrabold tracking-tight text-white tabular-nums">
-                  {formatBRL(totalFiltered)}
-                </p>
+            <div
+              className={`flex flex-wrap items-center justify-between gap-2 ${
+                expensesCollapse.isOpen ? 'border-b border-white/[0.06] pb-3' : ''
+              } cursor-pointer select-none group`}
+              onClick={expensesCollapse.toggle}
+            >
+              <div className="flex items-center gap-2.5">
+                <CollapseButton
+                  isOpen={expensesCollapse.isOpen}
+                  onToggle={expensesCollapse.toggle}
+                />
+                <div>
+                  <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider group-hover:text-purple-300 transition">
+                    Lançamentos Filtrados
+                  </p>
+                  <p className="text-xl font-extrabold tracking-tight text-white tabular-nums">
+                    {formatBRL(totalFiltered)}
+                  </p>
+                </div>
               </div>
 
               {/* Filtro Rápido: Todas / À vista / Parceladas */}
-              <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setInstallmentFilter('all')}
-                  className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                    installmentFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
-                  }`}
+              {expensesCollapse.isOpen && (
+                <div
+                  className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  Todas ({invoice?.expenses.length ?? 0})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInstallmentFilter('single')}
-                  className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                    installmentFilter === 'single'
-                      ? 'bg-purple-500/20 text-purple-300'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  À vista
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInstallmentFilter('installment')}
-                  className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                    installmentFilter === 'installment'
-                      ? 'bg-purple-500/20 text-purple-300'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                >
-                  Parceladas
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {/* Busca por texto */}
-              <div className="relative">
-                <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
-                <input
-                  type="text"
-                  placeholder="Buscar compra, loja ou categoria..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-purple-500/60"
-                />
-                {search && (
                   <button
-                    onClick={() => setSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-zinc-300"
+                    type="button"
+                    onClick={() => setInstallmentFilter('all')}
+                    className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                      installmentFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
+                    }`}
                   >
-                    ✕
+                    Todas ({invoice?.expenses.length ?? 0})
                   </button>
-                )}
-              </div>
-
-              {/* Filtro por Categoria */}
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-purple-500/60"
-              >
-                <option value="all">Todas as categorias</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                  <button
+                    type="button"
+                    onClick={() => setInstallmentFilter('single')}
+                    className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                      installmentFilter === 'single'
+                        ? 'bg-purple-500/20 text-purple-300'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    À vista
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInstallmentFilter('installment')}
+                    className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                      installmentFilter === 'installment'
+                        ? 'bg-purple-500/20 text-purple-300'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Parceladas
+                  </button>
+                </div>
+              )}
             </div>
+
+            {expensesCollapse.isOpen && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* Busca por texto */}
+                <div className="relative">
+                  <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Buscar compra, loja ou categoria..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-purple-500/60"
+                  />
+                  {search && (
+                    <button
+                      onClick={() => setSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-zinc-300"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Filtro por Categoria */}
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-purple-500/60"
+                >
+                  <option value="all">Todas as categorias</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </Card>
 
           {/* Lista de Compras */}
-          {filtered.length === 0 ? (
-            <Card className="text-center py-12 text-zinc-500">
-              <p className="text-sm font-medium">Nenhum lançamento de cartão encontrado neste filtro.</p>
-              {(search || selectedCategory !== 'all' || installmentFilter !== 'all') && (
-                <button
-                  onClick={() => {
-                    setSearch('');
-                    setSelectedCategory('all');
-                    setInstallmentFilter('all');
-                  }}
-                  className="mt-3 rounded-xl bg-purple-500/15 border border-purple-500/30 px-3 py-1.5 text-xs font-bold text-purple-300 hover:bg-purple-500/25 transition"
-                >
-                  Limpar todos os filtros
-                </button>
-              )}
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {grouped.map(([day, items]) => (
-                <div key={day}>
-                  <div className="mb-1.5 flex justify-between px-1 text-xs font-semibold text-zinc-400">
-                    <span className="capitalize">{dayLabel(day)}</span>
-                    <span className="tabular-nums text-zinc-300">
-                      {formatBRL(items.reduce((s, x) => s + x.amount_cents, 0))}
-                    </span>
-                  </div>
-                  <Card className="divide-y divide-white/[0.06] !p-0 overflow-hidden">
-                    {items.map((exp) => (
-                      <div
-                        key={exp.id}
-                        className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="font-bold text-sm text-zinc-100">
-                              {exp.title || exp.category_name}
-                            </p>
-                            <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-purple-300 border border-white/[0.07]">
-                              {exp.category_name}
-                            </span>
-                            {exp.installment_total > 1 ? (
-                              <span className="rounded-md px-2 py-0.5 text-[10px] font-bold border bg-purple-500/15 text-purple-300 border-purple-500/30">
-                                Parcela {exp.installment_current}/{exp.installment_total}
+          {expensesCollapse.isOpen && (
+            filtered.length === 0 ? (
+              <Card className="text-center py-12 text-zinc-500">
+                <p className="text-sm font-medium">Nenhum lançamento de cartão encontrado neste filtro.</p>
+                {(search || selectedCategory !== 'all' || installmentFilter !== 'all') && (
+                  <button
+                    onClick={() => {
+                      setSearch('');
+                      setSelectedCategory('all');
+                      setInstallmentFilter('all');
+                    }}
+                    className="mt-3 rounded-xl bg-purple-500/15 border border-purple-500/30 px-3 py-1.5 text-xs font-bold text-purple-300 hover:bg-purple-500/25 transition"
+                  >
+                    Limpar todos os filtros
+                  </button>
+                )}
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {grouped.map(([day, items]) => (
+                  <div key={day}>
+                    <div className="mb-1.5 flex justify-between px-1 text-xs font-semibold text-zinc-400">
+                      <span className="capitalize">{dayLabel(day)}</span>
+                      <span className="tabular-nums text-zinc-300">
+                        {formatBRL(items.reduce((s, x) => s + x.amount_cents, 0))}
+                      </span>
+                    </div>
+                    <Card className="divide-y divide-white/[0.06] !p-0 overflow-hidden">
+                      {items.map((exp) => (
+                        <div
+                          key={exp.id}
+                          className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-bold text-sm text-zinc-100">
+                                {exp.title || exp.category_name}
+                              </p>
+                              <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-purple-300 border border-white/[0.07]">
+                                {exp.category_name}
                               </span>
-                            ) : (
-                              <span className="rounded-md px-2 py-0.5 text-[10px] font-semibold border bg-zinc-900 text-zinc-400 border-white/[0.06]">
-                                1x à vista
-                              </span>
+                              {exp.installment_total > 1 ? (
+                                <span className="rounded-md px-2 py-0.5 text-[10px] font-bold border bg-purple-500/15 text-purple-300 border-purple-500/30">
+                                  Parcela {exp.installment_current}/{exp.installment_total}
+                                </span>
+                              ) : (
+                                <span className="rounded-md px-2 py-0.5 text-[10px] font-semibold border bg-zinc-900 text-zinc-400 border-white/[0.06]">
+                                  1x à vista
+                                </span>
+                              )}
+                            </div>
+                            {exp.description && (
+                              <p className="truncate text-xs text-zinc-400 mt-0.5">{exp.description}</p>
                             )}
                           </div>
-                          {exp.description && (
-                            <p className="truncate text-xs text-zinc-400 mt-0.5">{exp.description}</p>
-                          )}
+                          <span className="font-extrabold text-sm sm:text-base tabular-nums text-white">
+                            {formatBRL(exp.amount_cents)}
+                          </span>
+                          <button
+                            onClick={() => setEditingExpense(exp)}
+                            className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
+                            title="Editar lançamento"
+                            aria-label="Editar"
+                          >
+                            <IconEdit className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => remove(exp)}
+                            className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
+                            title="Excluir gasto"
+                            aria-label="Excluir"
+                          >
+                            <IconTrash className="h-4 w-4" />
+                          </button>
                         </div>
-                        <span className="font-extrabold text-sm sm:text-base tabular-nums text-white">
-                          {formatBRL(exp.amount_cents)}
-                        </span>
-                        <button
-                          onClick={() => setEditingExpense(exp)}
-                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition"
-                          title="Editar lançamento"
-                          aria-label="Editar"
-                        >
-                          <IconEdit className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => remove(exp)}
-                          className="rounded-lg p-1.5 text-zinc-600 hover:bg-red-500/10 hover:text-red-400 transition"
-                          title="Excluir gasto"
-                          aria-label="Excluir"
-                        >
-                          <IconTrash className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </Card>
-                </div>
-              ))}
-            </div>
+                      ))}
+                    </Card>
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </>
       )}

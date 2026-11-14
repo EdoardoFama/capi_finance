@@ -849,9 +849,11 @@ app.get('/dashboard', async (c) => {
          FROM expenses
          WHERE user_id = ?
            AND account_id = ?
+           AND payment_method != 'credit'
+           AND spent_on >= ?
            AND created_at >= ?`,
       )
-        .bind(uid, uAcc.slug, b.updated_at)
+        .bind(uid, uAcc.slug, start, b.updated_at)
         .first<{ total: number }>();
       spent_cents = row?.total ?? 0;
     }
@@ -1356,10 +1358,26 @@ app.get('/credit-card/invoice', async (c) => {
     .first<{ is_paid: number; paid_at: string | null; paid_amount_cents: number }>();
 
   const nubankRow = await c.env.DB.prepare(
-    `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY updated_at DESC LIMIT 1`,
+    `SELECT initial_cents, updated_at FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
   )
-    .bind(uid)
-    .first<{ initial_cents: number }>();
+    .bind(uid, month)
+    .first<{ initial_cents: number; updated_at: string }>();
+
+  let nubankBalanceCents = nubankRow?.initial_cents ?? 0;
+  if (nubankRow && nubankBalanceCents > 0 && nubankRow.updated_at) {
+    const spentRow = await c.env.DB.prepare(
+      `SELECT COALESCE(SUM(amount_cents), 0) AS total
+       FROM expenses
+       WHERE user_id = ?
+         AND account_id = 'nubank'
+         AND payment_method != 'credit'
+         AND spent_on >= ?
+         AND created_at >= ?`,
+    )
+      .bind(uid, start, nubankRow.updated_at)
+      .first<{ total: number }>();
+    nubankBalanceCents = Math.max(0, nubankBalanceCents - (spentRow?.total ?? 0));
+  }
 
   const paidAmountCents = invoice?.paid_amount_cents ?? 0;
   const remainingCents = Math.max(0, totalCents - paidAmountCents);
@@ -1374,7 +1392,7 @@ app.get('/credit-card/invoice', async (c) => {
     is_paid: isPaid,
     is_partial: paidAmountCents > 0 && remainingCents > 0,
     paid_at: invoice?.paid_at ?? null,
-    nubank_balance_cents: nubankRow?.initial_cents ?? 0,
+    nubank_balance_cents: nubankBalanceCents,
     expenses,
   });
 });

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type Category, type Expense, type AccountId, type PaymentMethod, ACCOUNT_DEFINITIONS } from '../api';
-import { formatBRL, parseBRL } from '../format';
+import { formatBRL, formatCurrencyInput, parseBRL } from '../format';
 import { useToast } from '../context';
 
 type Props = {
@@ -130,7 +130,7 @@ function EditExpenseForm({
               <input
                 type="text"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
                 placeholder="0,00"
                 required
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-500/60"

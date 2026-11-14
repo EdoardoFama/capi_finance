@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type Category, type Income } from '../api';
 import { useToast } from '../context';
-import { centsToInput, formatBRL, parseBRL } from '../format';
-import { Card, IconPlus, IconTrash, Input, PageTitle, Spinner } from '../components/ui';
+import { centsToInput, formatBRL, formatCurrencyInput, parseBRL } from '../format';
+import { Card, CollapseButton, IconPlus, IconTrash, Input, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 /* =========================================================
@@ -62,7 +62,7 @@ function IncomeRow({
           value={amount}
           placeholder="0,00"
           inputMode="decimal"
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
           onBlur={commitAmount}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           className="w-full bg-transparent text-right font-extrabold text-emerald-400 tabular-nums outline-none placeholder:text-zinc-700"
@@ -186,7 +186,7 @@ function CategoryRow({
             value={budget}
             placeholder="0,00"
             inputMode="decimal"
-            onChange={(e) => setBudget(e.target.value)}
+            onChange={(e) => setBudget(formatCurrencyInput(e.target.value))}
             onBlur={commitBudget}
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
             className={`w-full bg-transparent text-right font-extrabold tabular-nums outline-none placeholder:text-zinc-700 ${
@@ -276,7 +276,7 @@ function AddIncomeRow({ onAdd }: { onAdd: (name: string, amountCents: number) =>
           value={amount}
           placeholder="0,00"
           inputMode="decimal"
-          onChange={(e) => setAmount(e.target.value)}
+          onChange={(e) => setAmount(formatCurrencyInput(e.target.value))}
           className="w-full bg-transparent text-right font-extrabold text-emerald-400 tabular-nums outline-none placeholder:text-zinc-700"
         />
       </div>
@@ -372,7 +372,7 @@ function AddCategoryRow({
               value={budget}
               placeholder="0,00"
               inputMode="decimal"
-              onChange={(e) => setBudget(e.target.value)}
+              onChange={(e) => setBudget(formatCurrencyInput(e.target.value))}
               className="w-full bg-transparent text-right font-extrabold text-zinc-100 tabular-nums outline-none placeholder:text-zinc-700"
             />
           </div>
@@ -410,6 +410,10 @@ export default function Budget() {
   const [incomes, setIncomes] = useState<Income[] | null>(null);
   const [cats, setCats] = useState<Category[] | null>(null);
   const [catFilter, setCatFilter] = useState<'all' | 'fixed' | 'variable'>('all');
+
+  const summaryCollapse = useCollapsible('budget_summary', true);
+  const incomesCollapse = useCollapsible('budget_incomes', true);
+  const catsCollapse = useCollapsible('budget_categories', true);
 
   const budgetDistributionItems = useMemo(() => {
     return (cats ?? []).map((c) => ({
@@ -459,62 +463,84 @@ export default function Budget() {
       />
 
       {/* Cards Executivos de Resumo */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Card className="border-emerald-500/20 bg-gradient-to-br from-zinc-950 to-emerald-950/20">
-          <p className="text-[11px] font-bold tracking-wider text-emerald-400/90 uppercase">
-            Renda Mensal Prevista
-          </p>
-          <p className="mt-1 text-2xl font-black text-white tabular-nums">
-            {formatBRL(totalIncome)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            {incomes.length} {incomes.length === 1 ? 'fonte cadastrada' : 'fontes cadastradas'}
-          </p>
-        </Card>
-
-        <Card className="border-blue-500/20 bg-gradient-to-br from-zinc-950 to-blue-950/20">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] font-bold tracking-wider text-blue-300 uppercase">
-              Total Fixos Orçados
-            </p>
-            <span className="rounded-md bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">
-              {committedPct}% da renda
-            </span>
-          </div>
-          <p className="mt-1 text-2xl font-black text-white tabular-nums">
-            {formatBRL(fixedBudget)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            Soma de {fixedCats.length} categorias fixas
-          </p>
-        </Card>
-
-        <Card
-          className={
-            leftover < 0
-              ? 'border-red-500/30 bg-gradient-to-br from-zinc-950 to-red-950/20'
-              : 'border-purple-500/25 bg-gradient-to-br from-zinc-950 to-purple-950/25'
-          }
+      <div className="space-y-2">
+        <div
+          className="flex items-center justify-between cursor-pointer select-none group"
+          onClick={summaryCollapse.toggle}
         >
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] font-bold tracking-wider text-purple-300 uppercase">
-              Margem "Por Fora"
-            </p>
-            <span className="rounded-md bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300">
-              {Math.max(0, 100 - committedPct)}% livre
-            </span>
+          <div className="flex items-center gap-2">
+            <CollapseButton
+              isOpen={summaryCollapse.isOpen}
+              onToggle={summaryCollapse.toggle}
+            />
+            <h3 className="text-sm font-bold text-zinc-300 group-hover:text-white transition">
+              Visão Geral do Planejamento
+            </h3>
           </div>
-          <p
-            className={`mt-1 text-2xl font-black tabular-nums ${
-              leftover < 0 ? 'text-red-400' : 'text-purple-300'
-            }`}
-          >
-            {formatBRL(leftover)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            Ganhos − Fixos (para gastos variáveis)
-          </p>
-        </Card>
+          <span className="text-xs text-zinc-500 font-medium">
+            {summaryCollapse.isOpen ? 'Recolher resumo' : 'Expandir resumo'}
+          </span>
+        </div>
+
+        {summaryCollapse.isOpen && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card className="border-emerald-500/20 bg-gradient-to-br from-zinc-950 to-emerald-950/20">
+              <p className="text-[11px] font-bold tracking-wider text-emerald-400/90 uppercase">
+                Renda Mensal Prevista
+              </p>
+              <p className="mt-1 text-2xl font-black text-white tabular-nums">
+                {formatBRL(totalIncome)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                {incomes.length} {incomes.length === 1 ? 'fonte cadastrada' : 'fontes cadastradas'}
+              </p>
+            </Card>
+
+            <Card className="border-blue-500/20 bg-gradient-to-br from-zinc-950 to-blue-950/20">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold tracking-wider text-blue-300 uppercase">
+                  Total Fixos Orçados
+                </p>
+                <span className="rounded-md bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-bold text-blue-300">
+                  {committedPct}% da renda
+                </span>
+              </div>
+              <p className="mt-1 text-2xl font-black text-white tabular-nums">
+                {formatBRL(fixedBudget)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Soma de {fixedCats.length} categorias fixas
+              </p>
+            </Card>
+
+            <Card
+              className={
+                leftover < 0
+                  ? 'border-red-500/30 bg-gradient-to-br from-zinc-950 to-red-950/20'
+                  : 'border-purple-500/25 bg-gradient-to-br from-zinc-950 to-purple-950/25'
+              }
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-bold tracking-wider text-purple-300 uppercase">
+                  Margem "Por Fora"
+                </p>
+                <span className="rounded-md bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300">
+                  {Math.max(0, 100 - committedPct)}% livre
+                </span>
+              </div>
+              <p
+                className={`mt-1 text-2xl font-black tabular-nums ${
+                  leftover < 0 ? 'text-red-400' : 'text-purple-300'
+                }`}
+              >
+                {formatBRL(leftover)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Ganhos − Fixos (para gastos variáveis)
+              </p>
+            </Card>
+          </div>
+        )}
       </div>
 
       {/* Dashboard de Distribuição do Orçamento */}
@@ -522,131 +548,170 @@ export default function Budget() {
         title="Distribuição do Orçamento Fixo"
         subtitle="Peso percentual de cada categoria planejada dentro do seu custo fixo mensal"
         items={budgetDistributionItems}
+        storageKey="budget_distribution"
       />
 
       {/* Seção Ganhos */}
       <Card>
-        <div className="mb-3 flex items-center justify-between border-b border-white/[0.06] pb-3">
-          <div>
-            <h2 className="font-bold text-base text-white">Fontes de Renda</h2>
-            <p className="text-xs text-zinc-500">Salário, adiantamentos e rendimentos recorrentes</p>
+        <div
+          className={`flex items-center justify-between ${
+            incomesCollapse.isOpen ? 'mb-3 border-b border-white/[0.06] pb-3' : ''
+          } cursor-pointer select-none group`}
+          onClick={incomesCollapse.toggle}
+        >
+          <div className="flex items-center gap-2.5">
+            <CollapseButton
+              isOpen={incomesCollapse.isOpen}
+              onToggle={incomesCollapse.toggle}
+            />
+            <div>
+              <h2 className="font-bold text-base text-white group-hover:text-emerald-300 transition">
+                Fontes de Renda
+              </h2>
+              <p className="text-xs text-zinc-500">Salário, adiantamentos e rendimentos recorrentes</p>
+            </div>
           </div>
           <span className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-sm font-extrabold text-emerald-300 tabular-nums">
             {formatBRL(totalIncome)}
           </span>
         </div>
-        <div className="divide-y divide-white/[0.05]">
-          {incomes.map((it) => (
-            <IncomeRow
-              key={it.id}
-              item={it}
-              onSave={async (id, patch) => {
-                const upd = await run(
-                  () => api<Income>(`/incomes/${id}`, { method: 'PUT', body: patch }),
-                  'Ganho atualizado',
+        {incomesCollapse.isOpen && (
+          <>
+            <div className="divide-y divide-white/[0.05]">
+              {incomes.map((it) => (
+                <IncomeRow
+                  key={it.id}
+                  item={it}
+                  onSave={async (id, patch) => {
+                    const upd = await run(
+                      () => api<Income>(`/incomes/${id}`, { method: 'PUT', body: patch }),
+                      'Ganho atualizado',
+                    );
+                    setIncomes((l) => l!.map((x) => (x.id === id ? upd : x)));
+                  }}
+                  onDelete={async (id, name) => {
+                    if (!confirm(`Excluir ganho "${name}"?`)) return;
+                    await run(() => api(`/incomes/${id}`, { method: 'DELETE' }), 'Ganho excluído');
+                    setIncomes((l) => l!.filter((x) => x.id !== id));
+                  }}
+                />
+              ))}
+            </div>
+            <AddIncomeRow
+              onAdd={async (name, amountCents) => {
+                const created = await run(
+                  () => api<Income>('/incomes', { method: 'POST', body: { name, amount_cents: amountCents } }),
+                  'Ganho adicionado',
                 );
-                setIncomes((l) => l!.map((x) => (x.id === id ? upd : x)));
-              }}
-              onDelete={async (id, name) => {
-                if (!confirm(`Excluir ganho "${name}"?`)) return;
-                await run(() => api(`/incomes/${id}`, { method: 'DELETE' }), 'Ganho excluído');
-                setIncomes((l) => l!.filter((x) => x.id !== id));
+                setIncomes((l) => [...l!, created]);
               }}
             />
-          ))}
-        </div>
-        <AddIncomeRow
-          onAdd={async (name, amountCents) => {
-            const created = await run(
-              () => api<Income>('/incomes', { method: 'POST', body: { name, amount_cents: amountCents } }),
-              'Ganho adicionado',
-            );
-            setIncomes((l) => [...l!, created]);
-          }}
-        />
+          </>
+        )}
       </Card>
 
       {/* Seção Categorias */}
       <Card>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] pb-3.5">
-          <div>
-            <h2 className="font-bold text-base text-white">Categorias de Gastos</h2>
-            <p className="text-xs text-zinc-500">
-              Alterne entre <strong>Fixa</strong> e <strong>Variável</strong> ou edite valores e notas diretamente
-            </p>
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 ${
+            catsCollapse.isOpen ? 'mb-3 border-b border-white/[0.06] pb-3.5' : ''
+          }`}
+        >
+          <div
+            className="flex items-center gap-2.5 cursor-pointer select-none group"
+            onClick={catsCollapse.toggle}
+          >
+            <CollapseButton
+              isOpen={catsCollapse.isOpen}
+              onToggle={catsCollapse.toggle}
+            />
+            <div>
+              <h2 className="font-bold text-base text-white group-hover:text-emerald-300 transition">
+                Categorias de Gastos
+              </h2>
+              <p className="text-xs text-zinc-500">
+                Alterne entre <strong>Fixa</strong> e <strong>Variável</strong> ou edite valores e notas diretamente
+              </p>
+            </div>
           </div>
 
           {/* Abas de Filtro para visualização */}
-          <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setCatFilter('all')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                catFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Todas ({cats.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setCatFilter('fixed')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                catFilter === 'fixed' ? 'bg-blue-500/20 text-blue-300 shadow-sm' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Fixas ({fixedCats.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setCatFilter('variable')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                catFilter === 'variable' ? 'bg-purple-500/20 text-purple-300 shadow-sm' : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Variáveis ({variableCats.length})
-            </button>
-          </div>
+          {catsCollapse.isOpen && (
+            <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setCatFilter('all')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  catFilter === 'all' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Todas ({cats.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatFilter('fixed')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  catFilter === 'fixed' ? 'bg-blue-500/20 text-blue-300 shadow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Fixas ({fixedCats.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatFilter('variable')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  catFilter === 'variable' ? 'bg-purple-500/20 text-purple-300 shadow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Variáveis ({variableCats.length})
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="divide-y divide-white/[0.05]">
-          {displayedCats.map((c) => (
-            <CategoryRow
-              key={c.id}
-              item={c}
-              totalIncome={totalIncome}
-              onSave={async (id, patch) => {
-                const isTypeChange = patch.is_fixed !== undefined;
-                const message = isTypeChange
-                  ? `Categoria alterada para ${patch.is_fixed === 1 ? 'Fixa' : 'Variável (Por Fora)'}`
-                  : 'Categoria salva';
-                const upd = await run(
-                  () => api<Category>(`/categories/${id}`, { method: 'PUT', body: patch }),
-                  message,
+        {catsCollapse.isOpen && (
+          <>
+            <div className="divide-y divide-white/[0.05]">
+              {displayedCats.map((c) => (
+                <CategoryRow
+                  key={c.id}
+                  item={c}
+                  totalIncome={totalIncome}
+                  onSave={async (id, patch) => {
+                    const isTypeChange = patch.is_fixed !== undefined;
+                    const message = isTypeChange
+                      ? `Categoria alterada para ${patch.is_fixed === 1 ? 'Fixa' : 'Variável (Por Fora)'}`
+                      : 'Categoria salva';
+                    const upd = await run(
+                      () => api<Category>(`/categories/${id}`, { method: 'PUT', body: patch }),
+                      message,
+                    );
+                    setCats((l) => l!.map((x) => (x.id === id ? upd : x)));
+                  }}
+                  onDelete={async (id, name) => {
+                    if (!confirm(`Excluir a categoria "${name}"?`)) return;
+                    await run(() => api(`/categories/${id}`, { method: 'DELETE' }), 'Categoria excluída');
+                    setCats((l) => l!.filter((x) => x.id !== id));
+                  }}
+                />
+              ))}
+            </div>
+
+            <AddCategoryRow
+              onAdd={async (name, budgetCents, note, isFixed) => {
+                const created = await run(
+                  () =>
+                    api<Category>('/categories', {
+                      method: 'POST',
+                      body: { name, budget_cents: budgetCents, note, is_fixed: isFixed },
+                    }),
+                  'Categoria adicionada',
                 );
-                setCats((l) => l!.map((x) => (x.id === id ? upd : x)));
-              }}
-              onDelete={async (id, name) => {
-                if (!confirm(`Excluir a categoria "${name}"?`)) return;
-                await run(() => api(`/categories/${id}`, { method: 'DELETE' }), 'Categoria excluída');
-                setCats((l) => l!.filter((x) => x.id !== id));
+                setCats((l) => [...l!, created]);
               }}
             />
-          ))}
-        </div>
-
-        <AddCategoryRow
-          onAdd={async (name, budgetCents, note, isFixed) => {
-            const created = await run(
-              () =>
-                api<Category>('/categories', {
-                  method: 'POST',
-                  body: { name, budget_cents: budgetCents, note, is_fixed: isFixed },
-                }),
-              'Categoria adicionada',
-            );
-            setCats((l) => [...l!, created]);
-          }}
-        />
+          </>
+        )}
       </Card>
     </div>
   );

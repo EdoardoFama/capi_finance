@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type InvestmentAccount, type InvestmentSnapshot, type InvestmentsData, type RedeemResult, type UserAccount } from '../api';
 import { useToast } from '../context';
-import { centsToInput, formatBRL, parseBRL, shiftMonth, todayISO } from '../format';
-import { Card, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner } from '../components/ui';
+import { centsToInput, formatBRL, formatCurrencyInput, parseBRL, shiftMonth, todayISO } from '../format';
+import { Card, CollapseButton, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 const MONTH_NAMES = [
@@ -21,6 +21,9 @@ export default function Investments() {
   const [data, setData] = useState<InvestmentsData | null>(null);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const summaryCollapse = useCollapsible('invest_summary', true);
+  const tableCollapse = useCollapsible('invest_table', true);
 
   // Modal de Atualização de Saldos do Mês (Cálculo Automático)
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -402,47 +405,69 @@ export default function Investments() {
       </div>
 
       {/* Cards Executivos de Resumo */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Card className="border-emerald-500/25 bg-gradient-to-br from-zinc-900/95 via-zinc-950 to-emerald-950/25">
-          <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
-            Patrimônio Acumulado ({formatMonthHeader(activeLatestMonth)})
-          </p>
-          <p className="mt-1 text-2xl sm:text-3xl font-black tracking-tight text-white tabular-nums">
-            {formatBRL(latestSummary?.totalBalance ?? 0)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            Soma de {data.accounts.length} {data.accounts.length === 1 ? 'corretora cadastrada' : 'corretoras cadastradas'}
-          </p>
-        </Card>
+      <div className="space-y-2">
+        <div
+          className="flex items-center justify-between cursor-pointer select-none group"
+          onClick={summaryCollapse.toggle}
+        >
+          <div className="flex items-center gap-2">
+            <CollapseButton
+              isOpen={summaryCollapse.isOpen}
+              onToggle={summaryCollapse.toggle}
+            />
+            <h3 className="text-sm font-bold text-zinc-300 group-hover:text-white transition">
+              Métricas do Patrimônio
+            </h3>
+          </div>
+          <span className="text-xs text-zinc-500 font-medium">
+            {summaryCollapse.isOpen ? 'Recolher métricas' : 'Expandir métricas'}
+          </span>
+        </div>
 
-        <Card>
-          <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-            Rendimento Positivo no Mês
-          </p>
-          <p
-            className={`mt-1 text-2xl sm:text-3xl font-black tracking-tight tabular-nums ${
-              (latestSummary?.valorizacaoInvest ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
-            }`}
-          >
-            +{formatBRL(latestSummary?.valorizacaoInvest ?? 0)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">Ganhos calculados automaticamente</p>
-        </Card>
+        {summaryCollapse.isOpen && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card className="border-emerald-500/25 bg-gradient-to-br from-zinc-900/95 via-zinc-950 to-emerald-950/25">
+              <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                Patrimônio Acumulado ({formatMonthHeader(activeLatestMonth)})
+              </p>
+              <p className="mt-1 text-2xl sm:text-3xl font-black tracking-tight text-white tabular-nums">
+                {formatBRL(latestSummary?.totalBalance ?? 0)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                Soma de {data.accounts.length} {data.accounts.length === 1 ? 'corretora cadastrada' : 'corretoras cadastradas'}
+              </p>
+            </Card>
 
-        <Card>
-          <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
-            Variação Líquida do Mês
-          </p>
-          <p
-            className={`mt-1 text-2xl sm:text-3xl font-black tracking-tight tabular-nums ${
-              (latestSummary?.totalDelta ?? 0) >= 0 ? 'text-blue-300' : 'text-amber-400'
-            }`}
-          >
-            {(latestSummary?.totalDelta ?? 0) > 0 ? '+' : ''}
-            {formatBRL(latestSummary?.totalDelta ?? 0)}
-          </p>
-          <p className="mt-1 text-[11px] text-zinc-500">Diferença de patrimônio vs mês anterior</p>
-        </Card>
+            <Card>
+              <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                Rendimento Positivo no Mês
+              </p>
+              <p
+                className={`mt-1 text-2xl sm:text-3xl font-black tracking-tight tabular-nums ${
+                  (latestSummary?.valorizacaoInvest ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+                }`}
+              >
+                +{formatBRL(latestSummary?.valorizacaoInvest ?? 0)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">Ganhos calculados automaticamente</p>
+            </Card>
+
+            <Card>
+              <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                Variação Líquida do Mês
+              </p>
+              <p
+                className={`mt-1 text-2xl sm:text-3xl font-black tracking-tight tabular-nums ${
+                  (latestSummary?.totalDelta ?? 0) >= 0 ? 'text-blue-300' : 'text-amber-400'
+                }`}
+              >
+                {(latestSummary?.totalDelta ?? 0) > 0 ? '+' : ''}
+                {formatBRL(latestSummary?.totalDelta ?? 0)}
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">Diferença de patrimônio vs mês anterior</p>
+            </Card>
+          </div>
+        )}
       </div>
 
       {/* Distribuição da Carteira por Conta (Com botão de Sacar, Editar e Excluir) */}
@@ -450,24 +475,41 @@ export default function Investments() {
         title={`Alocação do Patrimônio (${formatMonthHeader(activeLatestMonth)})`}
         subtitle="Participação de cada corretora. Clique em Sacar para resgatar dinheiro para sua conta"
         items={portfolioDistribution}
+        storageKey="invest_distribution"
       />
 
       {/* Tabela de Evolução Estilo Planilha */}
       <Card className="!p-0 overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3.5 border-b border-white/[0.06] bg-zinc-900/40">
-          <div>
-            <h2 className="font-bold text-sm text-white">Planilha de Evolução Patrimonial</h2>
-            <p className="text-[11px] text-zinc-500">
-              Clique no cabeçalho do mês para atualizar saldos ou no ícone da instituição para editar
-            </p>
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2 px-4 py-3.5 ${
+            tableCollapse.isOpen ? 'border-b border-white/[0.06]' : ''
+          } bg-zinc-900/40 cursor-pointer select-none group`}
+          onClick={tableCollapse.toggle}
+        >
+          <div className="flex items-center gap-2.5">
+            <CollapseButton
+              isOpen={tableCollapse.isOpen}
+              onToggle={tableCollapse.toggle}
+            />
+            <div>
+              <h2 className="font-bold text-sm text-white group-hover:text-emerald-300 transition">
+                Planilha de Evolução Patrimonial
+              </h2>
+              <p className="text-[11px] text-zinc-500">
+                Clique no cabeçalho do mês para atualizar saldos ou no ícone da instituição para editar
+              </p>
+            </div>
           </div>
-          <span className="rounded-lg bg-zinc-900 border border-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-zinc-400">
-            Arraste horizontalmente ↔
-          </span>
+          {tableCollapse.isOpen && (
+            <span className="rounded-lg bg-zinc-900 border border-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-zinc-400">
+              Arraste horizontalmente ↔
+            </span>
+          )}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+        {tableCollapse.isOpen && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
             <thead>
               <tr className="border-b border-white/[0.08] bg-zinc-900/90 text-zinc-400 font-bold uppercase tracking-wider text-[11px]">
                 <th className="sticky left-0 z-20 bg-zinc-900 px-4 py-3 border-r border-white/[0.08] min-w-48">
@@ -619,6 +661,7 @@ export default function Investments() {
             </tbody>
           </table>
         </div>
+        )}
       </Card>
 
       {/* Modal: Atualizar Saldo do Mês (100% Automático) */}
@@ -697,7 +740,7 @@ export default function Investments() {
                           inputMode="decimal"
                           value={formBalances[acc.id] ?? ''}
                           onChange={(e) =>
-                            setFormBalances((prev) => ({ ...prev, [acc.id]: e.target.value }))
+                            setFormBalances((prev) => ({ ...prev, [acc.id]: formatCurrencyInput(e.target.value) }))
                           }
                           className="w-full rounded-xl border border-white/[0.08] bg-zinc-950 px-3.5 py-2 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
                         />
@@ -817,7 +860,7 @@ export default function Investments() {
                   placeholder="0,00"
                   inputMode="decimal"
                   value={redeemAmount}
-                  onChange={(e) => setRedeemAmount(e.target.value)}
+                  onChange={(e) => setRedeemAmount(formatCurrencyInput(e.target.value))}
                   className={`w-full rounded-xl border bg-zinc-900 px-3.5 py-2.5 text-base text-white font-black tabular-nums outline-none transition ${
                     isRedeemOverLimit
                       ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/20'
