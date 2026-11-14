@@ -171,8 +171,10 @@ export type CreditCardInvoice = {
   total_cents: number;
   count: number;
   is_paid: boolean;
+  is_partial?: boolean;
   paid_at: string | null;
   paid_amount_cents: number;
+  remaining_cents: number;
   nubank_balance_cents: number;
   expenses: Expense[];
 };

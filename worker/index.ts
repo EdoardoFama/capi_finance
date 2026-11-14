@@ -1361,13 +1361,19 @@ app.get('/credit-card/invoice', async (c) => {
     .bind(uid)
     .first<{ initial_cents: number }>();
 
+  const paidAmountCents = invoice?.paid_amount_cents ?? 0;
+  const remainingCents = Math.max(0, totalCents - paidAmountCents);
+  const isPaid = (totalCents > 0 && paidAmountCents >= totalCents) || Boolean(invoice?.is_paid && remainingCents === 0);
+
   return c.json({
     month,
     total_cents: totalCents,
+    paid_amount_cents: paidAmountCents,
+    remaining_cents: remainingCents,
     count: expenses.length,
-    is_paid: Boolean(invoice?.is_paid),
+    is_paid: isPaid,
+    is_partial: paidAmountCents > 0 && remainingCents > 0,
     paid_at: invoice?.paid_at ?? null,
-    paid_amount_cents: invoice?.paid_amount_cents ?? 0,
     nubank_balance_cents: nubankRow?.initial_cents ?? 0,
     expenses,
   });
@@ -1379,14 +1385,6 @@ app.post('/credit-card/pay', async (c) => {
   const month = str(data.month, 'mês')!;
   const [start, end] = monthRange(month);
 
-  const existing = await c.env.DB.prepare(
-    `SELECT is_paid FROM credit_card_invoices WHERE user_id = ? AND month = ?`,
-  )
-    .bind(uid, month)
-    .first<{ is_paid: number }>();
-
-  if (existing?.is_paid) bad('Esta fatura já está marcada como paga');
-
   const totalRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
      WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
@@ -1396,6 +1394,28 @@ app.post('/credit-card/pay', async (c) => {
 
   const totalCents = totalRow?.total ?? 0;
   if (totalCents <= 0) bad('Não há despesas no cartão nesta fatura para pagar');
+
+  const existing = await c.env.DB.prepare(
+    `SELECT is_paid, paid_amount_cents FROM credit_card_invoices WHERE user_id = ? AND month = ?`,
+  )
+    .bind(uid, month)
+    .first<{ is_paid: number; paid_amount_cents: number }>();
+
+  const currentPaid = existing?.paid_amount_cents ?? 0;
+  const remaining = Math.max(0, totalCents - currentPaid);
+  if (remaining <= 0) bad('Esta fatura já está totalmente quitada');
+
+  // Suporte a pagamento parcial ou total
+  let payCents = remaining;
+  if (data.amount_cents !== undefined && data.amount_cents !== null && data.amount_cents !== '') {
+    payCents = cents(data.amount_cents, 'valor a pagar', { min: 1 })!;
+    if (payCents > remaining) {
+      bad(`O valor a pagar não pode exceder o restante da fatura (R$ ${(remaining / 100).toFixed(2).replace('.', ',')})`);
+    }
+  }
+
+  const newTotalPaid = currentPaid + payCents;
+  const isPaid = newTotalPaid >= totalCents ? 1 : 0;
 
   // Abater do saldo da conta Nubank
   const nubankBalance = await c.env.DB.prepare(
@@ -1407,7 +1427,7 @@ app.post('/credit-card/pay', async (c) => {
     .first<{ id: number; month: string; initial_cents: number }>();
 
   if (nubankBalance) {
-    const newBalance = Math.max(0, nubankBalance.initial_cents - totalCents);
+    const newBalance = Math.max(0, nubankBalance.initial_cents - payCents);
     await c.env.DB.prepare(
       `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
     )
@@ -1424,14 +1444,21 @@ app.post('/credit-card/pay', async (c) => {
 
   await c.env.DB.prepare(
     `INSERT INTO credit_card_invoices (user_id, month, is_paid, paid_at, paid_amount_cents)
-     VALUES (?, ?, 1, datetime('now'), ?)
+     VALUES (?, ?, ?, datetime('now'), ?)
      ON CONFLICT(user_id, month)
-     DO UPDATE SET is_paid = 1, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
+     DO UPDATE SET is_paid = excluded.is_paid, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
   )
-    .bind(uid, month, totalCents)
+    .bind(uid, month, isPaid, newTotalPaid)
     .run();
 
-  return c.json({ ok: true, month, paid_amount_cents: totalCents });
+  return c.json({
+    ok: true,
+    month,
+    paid_now_cents: payCents,
+    total_paid_cents: newTotalPaid,
+    remaining_cents: Math.max(0, totalCents - newTotalPaid),
+    is_paid: isPaid === 1,
+  });
 });
 
 app.post('/credit-card/reopen', async (c) => {
@@ -1445,7 +1472,11 @@ app.post('/credit-card/reopen', async (c) => {
     .bind(uid, month)
     .first<{ is_paid: number; paid_amount_cents: number }>();
 
-  if (!existing || !existing.is_paid) bad('Esta fatura não está paga');
+  if (!existing || (existing.paid_amount_cents || 0) <= 0) {
+    bad('Nenhum pagamento registrado nesta fatura para desfazer');
+  }
+
+  const paidAmount = existing.paid_amount_cents || 0;
 
   // Restaurar o valor abatido no saldo da Nubank
   const nubankBalance = await c.env.DB.prepare(
@@ -1457,7 +1488,7 @@ app.post('/credit-card/reopen', async (c) => {
     .first<{ id: number; initial_cents: number }>();
 
   if (nubankBalance) {
-    const restored = nubankBalance.initial_cents + (existing.paid_amount_cents || 0);
+    const restored = nubankBalance.initial_cents + paidAmount;
     await c.env.DB.prepare(
       `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ?`,
     )
@@ -1471,7 +1502,7 @@ app.post('/credit-card/reopen', async (c) => {
     .bind(uid, month)
     .run();
 
-  return c.json({ ok: true, month });
+  return c.json({ ok: true, month, restored_cents: paidAmount });
 });
 
 export default app;
