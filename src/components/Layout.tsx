@@ -19,23 +19,23 @@ export default function Layout() {
     <div className="min-h-dvh flex flex-col">
       {/* Header Superior Glassmorphic */}
       <header className="pt-safe sticky top-0 z-30 border-b border-white/[0.07] bg-[#060609]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-4">
-          <Link to="/" className="flex items-center gap-2.5 group">
-            <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-zinc-900 border border-emerald-500/30 p-1 shadow-inner transition group-hover:border-emerald-400/60">
+        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 gap-3">
+          <Link to="/" className="flex items-center gap-2.5 group shrink-0">
+            <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-zinc-900 border border-emerald-500/30 p-1 shadow-inner transition group-hover:border-emerald-400/60">
               <img src="/logo.png" alt="Capi Finance" className="h-7 w-7 object-contain" />
             </div>
-            <div className="flex flex-col">
-              <span className="text-base font-extrabold tracking-tight leading-none text-white">
+            <div className="flex flex-col whitespace-nowrap">
+              <span className="text-base font-extrabold tracking-tight text-white leading-tight">
                 Capi <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">Finance</span>
               </span>
-              <span className="text-[10px] font-medium text-zinc-500 tracking-wider uppercase mt-0.5">
+              <span className="text-[10px] font-medium text-zinc-400 tracking-wider uppercase leading-none mt-1">
                 Gestão Pessoal
               </span>
             </div>
           </Link>
 
           {/* Navegação Desktop */}
-          <nav className="hidden items-center gap-1 rounded-2xl border border-white/[0.06] bg-zinc-950/80 p-1 md:flex">
+          <nav className="hidden items-center gap-1 rounded-2xl border border-white/[0.06] bg-zinc-950/80 p-1 md:flex shrink-0">
             {NAV.map(({ to, label, icon: Icon, end }) => (
               <NavLink
                 key={to}
@@ -74,7 +74,7 @@ export default function Layout() {
           </nav>
 
           {/* Perfil & Sair */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {user?.is_admin && (
               <NavLink
                 to="/admin"
@@ -103,7 +103,7 @@ export default function Layout() {
       </header>
 
       {/* Conteúdo Principal */}
-      <main className="mx-auto w-full max-w-4xl flex-1 px-4 pt-5 pb-32 md:pb-14">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-5 pb-32 md:pb-14">
         <Outlet />
       </main>
 
