@@ -695,7 +695,7 @@ export default function CreditCard() {
           )}
 
           {/* Filtros da lista */}
-          <Card id="fatura-lancamentos-section" className="space-y-3.5">
+          <Card id="fatura-lancamentos-section" className="relative z-30 space-y-3.5">
             <div
               className={`flex flex-wrap items-center justify-between gap-2 ${
                 expensesCollapse.isOpen ? 'border-b border-white/[0.06] pb-3' : ''

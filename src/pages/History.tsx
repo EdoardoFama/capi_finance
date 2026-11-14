@@ -390,7 +390,7 @@ export default function History() {
       )}
 
       {/* Resumo e Filtros */}
-      <Card id="extrato-filtros-section" className="space-y-4">
+      <Card id="extrato-filtros-section" className="relative z-30 space-y-4">
         {/* Balanço Filtrado: Saídas, Entradas e Saldo */}
         <div
           className={`flex flex-wrap items-center justify-between gap-3 ${

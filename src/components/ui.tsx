@@ -266,6 +266,7 @@ export function CustomSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [openUpwards, setOpenUpwards] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -279,6 +280,19 @@ export function CustomSelect({
     const q = searchTerm.toLowerCase();
     return options.filter((opt) => opt.label.toLowerCase().includes(q));
   }, [options, searchTerm]);
+
+  // Detecta se deve abrir para cima ou para baixo para não cortar na tela
+  useEffect(() => {
+    if (isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < 260 && rect.top > spaceBelow) {
+        setOpenUpwards(true);
+      } else {
+        setOpenUpwards(false);
+      }
+    }
+  }, [isOpen]);
 
   // Foco no input de busca ao abrir
   useEffect(() => {
@@ -311,7 +325,7 @@ export function CustomSelect({
   }, [isOpen]);
 
   return (
-    <div ref={containerRef} className={`relative w-full ${className}`}>
+    <div ref={containerRef} className={`relative w-full ${isOpen ? 'z-50' : 'z-10'} ${className}`}>
       {/* Botão Gatilho (Trigger) */}
       <button
         type="button"
@@ -347,7 +361,9 @@ export function CustomSelect({
       {/* Popover / Dropdown Menu */}
       {isOpen && (
         <div
-          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} z-50 mt-1.5 w-full min-w-[220px] max-w-[420px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 p-1.5 shadow-2xl shadow-black/90 backdrop-blur-xl ring-1 ring-black/50 animate-in fade-in zoom-in-95 duration-100`}
+          className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} ${
+            openUpwards ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+          } z-50 w-full min-w-[240px] max-w-[420px] overflow-hidden rounded-2xl border border-white/15 bg-zinc-950 p-1.5 shadow-2xl shadow-black ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-100`}
         >
           {/* Campo de Busca Rápida (quando houver mais de 5 opções) */}
           {options.length > 5 && (
