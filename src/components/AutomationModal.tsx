@@ -40,7 +40,7 @@ export default function AutomationModal({ isOpen, onClose }: Props) {
     const jsonTemplate = JSON.stringify(
       {
         title: '[not_title]',
-        text: '[not_body]',
+        text: '[notification]',
       },
       null,
       2,
@@ -234,8 +234,8 @@ export default function AutomationModal({ isOpen, onClose }: Props) {
                       </div>
                       <pre className="mt-1 rounded-lg bg-black p-2 font-mono text-[10px] text-emerald-300">
 {`{
-  "title": "{not_title}",
-  "text": "{not_body}"
+  "title": "[not_title]",
+  "text": "[notification]"
 }`}
                       </pre>
                     </li>
