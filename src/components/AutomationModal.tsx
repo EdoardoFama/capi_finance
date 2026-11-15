@@ -39,8 +39,8 @@ export default function AutomationModal({ isOpen, onClose }: Props) {
   async function handleCopyPayload() {
     const jsonTemplate = JSON.stringify(
       {
-        title: '{not_title}',
-        text: '{not_body}',
+        title: '[not_title]',
+        text: '[not_body]',
       },
       null,
       2,

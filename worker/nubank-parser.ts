@@ -32,24 +32,35 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
   const lower = fullText.toLowerCase();
 
   // 1. Extração do Valor em R$
-  const amountMatch = fullText.match(/R\$\s*([\d\.]+(?:,\d{1,2})?)/i) ||
-                      fullText.match(/(?:valor|total|de)\s*([\d\.]+,\d{2})/i);
+  const amountMatch =
+    fullText.match(/R\$\s*([\d\.]+(?:,\d{1,2})?)/i) ||
+    fullText.match(/(?:valor|total|de)\s*([\d\.]+,\d{2})/i) ||
+    fullText.match(/R\$\s*(\d+)/i) ||
+    fullText.match(/(\d+,\d{2})/i);
   const amount_cents = amountMatch ? parseBrlCents(amountMatch[1]) : 0;
 
   // 2. Se for recebimento (Inflow)
   const isInflow =
-    lower.includes('recebeu uma transferência') ||
-    lower.includes('recebeu um pix') ||
+    lower.includes('recebeu') ||
+    lower.includes('recebido') ||
+    lower.includes('te enviou') ||
     lower.includes('transferência recebida') ||
     lower.includes('pix recebido') ||
     lower.includes('crédito em conta') ||
-    lower.includes('te enviou um pix');
+    lower.includes('enviou um pix pra você') ||
+    lower.includes('fez um pix') ||
+    lower.includes('mandou um pix');
 
   if (isInflow && amount_cents > 0) {
     let sender = 'Transferência Recebida';
-    const senderMatch = fullText.match(/(?:de|por)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\-_]+?)(?:\s*(?:via|\.|$))/i);
+    const senderMatch =
+      fullText.match(/(?:de|por)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\-_]+?)(?:\s*(?:via|no\s+valor|\.|$))/i) ||
+      fullText.match(/([A-Za-zÀ-ÖØ-öø-ÿ\s]+?)\s+(?:te enviou|fez um pix|enviou|mandou)/i);
     if (senderMatch && senderMatch[1].trim()) {
       sender = senderMatch[1].trim().replace(/\.+$/, '');
+      if (sender.toLowerCase().startsWith('nubank ')) {
+        sender = sender.slice(7).trim();
+      }
     }
     return {
       type: 'inflow',

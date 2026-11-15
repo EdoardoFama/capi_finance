@@ -2105,6 +2105,15 @@ app.post('/integrations/nubank', async (c) => {
   // Parsing do evento Nubank
   const parsed = parseNubankNotification(title, text);
 
+  // Log de diagnóstico em tempo real
+  await logSecurityEvent(
+    c.env.DB,
+    c,
+    'WEBHOOK_DEBUG',
+    `Recebido: title="${title}" | text="${text}" | parsed=${parsed.type} R$ ${(parsed.amount_cents / 100).toFixed(2)}`,
+    user.id,
+  );
+
   // Sobrescrever se vier explícito
   if (typeof rawData.amount_cents === 'number' && rawData.amount_cents > 0) {
     parsed.amount_cents = rawData.amount_cents;
