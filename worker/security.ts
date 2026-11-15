@@ -195,6 +195,9 @@ export function verifyCsrfAndOrigin(c: Context): void {
   const method = c.req.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
 
+  // Webhooks e integrações externas autenticadas por Token / API Key
+  if (c.req.path.startsWith('/api/integrations/')) return;
+
   // 1. Verifica Sec-Fetch-Site quando enviado por navegadores modernos
   const secFetchSite = c.req.header('Sec-Fetch-Site');
   if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {

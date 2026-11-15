@@ -3,6 +3,7 @@ import { NavLink, Outlet, Link } from 'react-router';
 import { useAuth, useConfirm } from '../context';
 import { IconCreditCard, IconHome, IconList, IconLogout, IconPlus, IconTrendingUp, IconWallet } from './ui';
 import InstallPwaModal, { usePwaInstall } from './InstallPwaModal';
+import AutomationModal from './AutomationModal';
 
 const NAV = [
   { to: '/', label: 'Início', icon: IconHome, end: true },
@@ -17,6 +18,7 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const confirm = useConfirm();
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const [showAutomationModal, setShowAutomationModal] = useState(false);
   const { deferredPrompt, isStandalone, isIos } = usePwaInstall();
   const initial = (user?.username?.[0] ?? 'U').toUpperCase();
 
@@ -91,6 +93,16 @@ export default function Layout() {
 
           {/* Perfil & Sair */}
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowAutomationModal(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-purple-500/30 bg-purple-500/10 px-2.5 py-1.5 text-xs font-bold text-purple-300 transition hover:bg-purple-500/20 active:scale-95 shadow-sm shadow-purple-500/10"
+              title="Automação Nubank (MacroDroid)"
+            >
+              <span>⚡</span>
+              <span className="hidden sm:inline">Automação</span>
+            </button>
+
             {!isStandalone && (deferredPrompt || isIos) && (
               <button
                 type="button"
@@ -136,6 +148,12 @@ export default function Layout() {
         onClose={() => setShowInstallModal(false)}
         deferredPrompt={deferredPrompt}
         isIos={isIos}
+      />
+
+      {/* Modal de Automação Nubank */}
+      <AutomationModal
+        isOpen={showAutomationModal}
+        onClose={() => setShowAutomationModal(false)}
       />
 
       {/* Conteúdo Principal */}

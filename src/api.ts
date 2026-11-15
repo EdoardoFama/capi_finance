@@ -241,3 +241,12 @@ export type RedeemResult = {
   new_balance_cents: number;
   month: string;
 };
+
+export type WebhookTokenResponse = {
+  webhook_token: string;
+  webhook_url: string;
+};
+
+export const getWebhookToken = () => api<WebhookTokenResponse>('/user/webhook-token');
+export const regenerateWebhookToken = () => api<WebhookTokenResponse>('/user/webhook-token/regenerate', { method: 'POST' });
+

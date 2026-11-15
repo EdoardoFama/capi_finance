@@ -25,6 +25,7 @@ import {
   applySecurityHeaders,
   verifyCsrfAndOrigin,
 } from './security';
+import { parseNubankNotification } from './nubank-parser';
 
 type Env = {
   DB: D1Database;
@@ -582,7 +583,8 @@ app.use('*', async (c, next) => {
     c.req.path === '/api/auth/signup/request' ||
     c.req.path === '/api/auth/signup/confirm' ||
     c.req.path === '/api/auth/password/request' ||
-    c.req.path === '/api/auth/password/reset'
+    c.req.path === '/api/auth/password/reset' ||
+    c.req.path.startsWith('/api/integrations/')
   ) {
     return next();
   }
@@ -1995,6 +1997,283 @@ app.post('/credit-card/reopen', async (c) => {
   await c.env.DB.batch(stmts);
 
   return c.json({ ok: true, month, restored_cents: paidAmount });
+});
+
+// ============================================================================
+// INTEGRAÇÃO NUBANK / MACRODROID (WEBHOOK AUTOMÁTICO)
+// ============================================================================
+
+function getTodayBrasilia(): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(new Date());
+}
+
+// Retorna token de integração do usuário autenticado para configuração no celular
+app.get('/user/webhook-token', async (c) => {
+  const uid = c.get('userId');
+  let user = await c.env.DB.prepare('SELECT webhook_token FROM users WHERE id = ?')
+    .bind(uid)
+    .first<{ webhook_token: string | null }>();
+
+  let token = user?.webhook_token;
+  if (!token) {
+    token = 'capi_live_' + randomToken() + randomToken().slice(0, 8);
+    await c.env.DB.prepare('UPDATE users SET webhook_token = ? WHERE id = ?')
+      .bind(token, uid)
+      .run();
+  }
+
+  const url = new URL(c.req.url);
+  const webhookUrl = `${url.origin}/api/integrations/nubank?token=${token}`;
+
+  return c.json({ webhook_token: token, webhook_url: webhookUrl });
+});
+
+// Regenera token de integração
+app.post('/user/webhook-token/regenerate', async (c) => {
+  const uid = c.get('userId');
+  const token = 'capi_live_' + randomToken() + randomToken().slice(0, 8);
+  await c.env.DB.prepare('UPDATE users SET webhook_token = ? WHERE id = ?')
+    .bind(token, uid)
+    .run();
+
+  await logSecurityEvent(c.env.DB, c, 'WEBHOOK_TOKEN_REGENERATED', 'Token de webhook regenerado pelo usuário', uid);
+
+  const url = new URL(c.req.url);
+  const webhookUrl = `${url.origin}/api/integrations/nubank?token=${token}`;
+
+  return c.json({ webhook_token: token, webhook_url: webhookUrl });
+});
+
+// Endpoint receptor público autenticado por Token de Webhook
+app.post('/integrations/nubank', async (c) => {
+  const ip = getClientIp(c);
+
+  // Rate limit para prevenir força bruta no token de webhook
+  await checkRateLimit(c.env.DB, {
+    key: `webhook_flood:${ip}`,
+    maxPoints: 120,
+    windowMs: 60_000,
+    blockDurationMs: 60_000,
+    errorMessage: 'Muitas requisições de webhook. Aguarde um instante.',
+  });
+
+  const authHeader = c.req.header('Authorization');
+  let token: string | undefined = c.req.header('X-Api-Key') || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
+  if (!token) token = c.req.query('token') || undefined;
+
+  const rawData: Record<string, any> = (await body(c).catch(() => ({}))) as Record<string, any>;
+  if (!token && typeof rawData.token === 'string') {
+    token = rawData.token;
+  }
+
+  if (!token || typeof token !== 'string' || token.length < 16) {
+    await logSecurityEvent(c.env.DB, c, 'WEBHOOK_UNAUTHORIZED', 'Tentativa de webhook sem token ou com token curto');
+    return c.json({ error: 'Token de autenticação não fornecido ou inválido' }, 401);
+  }
+
+  // Buscar usuário dono do webhook_token
+  const user = await c.env.DB.prepare(
+    'SELECT id, username, is_active FROM users WHERE webhook_token = ?'
+  )
+    .bind(token)
+    .first<{ id: number; username: string; is_active: number }>();
+
+  if (!user || user.is_active === 0) {
+    await logSecurityEvent(c.env.DB, c, 'WEBHOOK_TOKEN_INVALID', `Token inválido tentou webhook: ${token.slice(0, 10)}...`);
+    return c.json({ error: 'Token de integração inválido ou conta inativa' }, 401);
+  }
+
+  // Se for ping de teste
+  if (rawData.test === true || rawData.ping === true) {
+    return c.json({
+      ok: true,
+      status: 'pong',
+      message: `Conexão bem-sucedida para o usuário ${user.username}! Capi Finance pronto para receber notificações.`,
+    });
+  }
+
+  // Obter texto e título da notificação
+  const title = String(rawData.title || rawData.notification_title || rawData.header || '').trim();
+  const text = String(rawData.text || rawData.notification_text || rawData.message || rawData.content || '').trim();
+
+  // Parsing do evento Nubank
+  const parsed = parseNubankNotification(title, text);
+
+  // Sobrescrever se vier explícito
+  if (typeof rawData.amount_cents === 'number' && rawData.amount_cents > 0) {
+    parsed.amount_cents = rawData.amount_cents;
+  }
+  if (typeof rawData.title === 'string' && rawData.title.trim() && parsed.title === 'Compra Nubank') {
+    parsed.title = rawData.title.trim();
+  }
+
+  if (parsed.type === 'ignore' || parsed.amount_cents <= 0) {
+    return c.json({
+      ok: true,
+      action: 'ignored',
+      reason: parsed.description || 'Notificação sem valor financeiro ou ignorada por regra',
+      raw_text: parsed.raw_text,
+    });
+  }
+
+  const today = getTodayBrasilia();
+
+  // Anti-duplicação nos últimos 120 segundos
+  if (parsed.type === 'expense') {
+    const existing = await c.env.DB.prepare(
+      `SELECT id FROM expenses
+       WHERE user_id = ? AND amount_cents = ? AND title = ? AND created_at > datetime('now', '-2 minutes')`
+    )
+      .bind(user.id, parsed.amount_cents, parsed.title)
+      .first<{ id: number }>();
+
+    if (existing) {
+      return c.json({
+        ok: true,
+        action: 'ignored_duplicate',
+        message: 'Lançamento já registrado recentemente (anti-duplicação)',
+        expense_id: existing.id,
+      });
+    }
+
+    // Resolver categoria do usuário
+    const categories = await c.env.DB.prepare(
+      'SELECT id, name FROM categories WHERE user_id = ?'
+    )
+      .bind(user.id)
+      .all<{ id: number; name: string }>();
+
+    const targetCategoryHint = (parsed.category_hint || 'OUTROS').toUpperCase();
+    let matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === targetCategoryHint);
+    if (!matchedCat) {
+      matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === 'OUTROS') || categories.results[0];
+    }
+    const categoryId = matchedCat?.id ?? 1;
+
+    // Inserção da despesa à vista
+    if (parsed.installments <= 1) {
+      const { id } = (await c.env.DB.prepare(
+        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'nubank', 1, 1) RETURNING id`
+      )
+        .bind(
+          user.id,
+          categoryId,
+          parsed.amount_cents,
+          parsed.title,
+          parsed.description,
+          today,
+          parsed.payment_method
+        )
+        .first<{ id: number }>())!;
+
+      await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_EXPENSE', `Despesa automática: ${parsed.title} (R$ ${(parsed.amount_cents / 100).toFixed(2)})`, user.id);
+
+      return c.json({
+        ok: true,
+        action: 'expense_created',
+        data: {
+          id,
+          title: parsed.title,
+          amount_cents: parsed.amount_cents,
+          amount_formatted: `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`,
+          category: matchedCat?.name,
+          payment_method: parsed.payment_method,
+          spent_on: today,
+        },
+      }, 201);
+    } else {
+      // Parcelado em N vezes
+      const groupId = randomToken();
+      const baseInstallment = Math.floor(parsed.amount_cents / parsed.installments);
+      const remainder = parsed.amount_cents % parsed.installments;
+
+      const statements: D1PreparedStatement[] = [];
+      for (let i = 1; i <= parsed.installments; i++) {
+        const instAmount = i === 1 ? baseInstallment + remainder : baseInstallment;
+        const instDate = addMonthsToDate(today, i - 1);
+        statements.push(
+          c.env.DB.prepare(
+            `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total, installment_group_id)
+             VALUES (?, ?, ?, ?, ?, ?, 'credit', 'nubank', ?, ?, ?)`
+          ).bind(
+            user.id,
+            categoryId,
+            instAmount,
+            parsed.title,
+            parsed.description,
+            instDate,
+            i,
+            parsed.installments,
+            groupId
+          )
+        );
+      }
+      await c.env.DB.batch(statements);
+
+      await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_EXPENSE_PARCELADO', `Despesa parcelada (${parsed.installments}x): ${parsed.title}`, user.id);
+
+      return c.json({
+        ok: true,
+        action: 'expense_installment_created',
+        data: {
+          title: parsed.title,
+          installments: parsed.installments,
+          total_amount_formatted: `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`,
+          first_installment_formatted: `R$ ${((baseInstallment + remainder) / 100).toFixed(2).replace('.', ',')}`,
+          category: matchedCat?.name,
+          spent_on: today,
+        },
+      }, 201);
+    }
+  }
+
+  if (parsed.type === 'inflow') {
+    const existingInflow = await c.env.DB.prepare(
+      `SELECT id FROM inflows
+       WHERE user_id = ? AND amount_cents = ? AND description = ? AND created_at > datetime('now', '-2 minutes')`
+    )
+      .bind(user.id, parsed.amount_cents, parsed.description)
+      .first<{ id: number }>();
+
+    if (existingInflow) {
+      return c.json({
+        ok: true,
+        action: 'ignored_duplicate',
+        message: 'Entrada já registrada recentemente (anti-duplicação)',
+        inflow_id: existingInflow.id,
+      });
+    }
+
+    const { id } = (await c.env.DB.prepare(
+      `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+       VALUES (?, 'nubank', ?, ?, ?) RETURNING id`
+    )
+      .bind(user.id, parsed.amount_cents, parsed.description, today)
+      .first<{ id: number }>())!;
+
+    await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_INFLOW', `Entrada automática: R$ ${(parsed.amount_cents / 100).toFixed(2)}`, user.id);
+
+    return c.json({
+      ok: true,
+      action: 'inflow_created',
+      data: {
+        id,
+        amount_cents: parsed.amount_cents,
+        amount_formatted: `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`,
+        description: parsed.description,
+        received_on: today,
+      },
+    }, 201);
+  }
+
+  return c.json({ ok: false, message: 'Tipo não processável' }, 400);
 });
 
 export default app;

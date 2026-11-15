@@ -8,3 +8,5 @@ dist/
 # Dados sensíveis (senhas e orçamento real ficam fora do Git)
 scripts/*.local.json
 seed/
+*.pdf
+Relatorio_Financeiro_Capi_2025_2026.pdf
