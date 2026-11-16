@@ -153,7 +153,7 @@ export type Expense = {
   created_at: string;
 };
 
-export type DashboardCategory = Category & { spent_cents: number; count: number; is_fixed: number };
+export type DashboardCategory = Category & { spent_cents: number; count: number; is_fixed: number; is_checked?: boolean };
 
 export type DashboardProjection = {
   bank_balance_cents: number;
@@ -249,4 +249,9 @@ export type WebhookTokenResponse = {
 
 export const getWebhookToken = () => api<WebhookTokenResponse>('/user/webhook-token');
 export const regenerateWebhookToken = () => api<WebhookTokenResponse>('/user/webhook-token/regenerate', { method: 'POST' });
+export const toggleCategoryCheck = (id: number, month: string, is_checked: boolean) =>
+  api<{ ok: boolean; category_id: number; month: string; is_checked: boolean }>(`/categories/${id}/check`, {
+    method: 'POST',
+    body: { month, is_checked },
+  });
 

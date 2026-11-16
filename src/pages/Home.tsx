@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS } from '../api';
+import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS, toggleCategoryCheck } from '../api';
 import { useMonth, useToast, useConfirm } from '../context';
 import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth } from '../format';
 import {
   Card,
   CollapseButton,
+  IconCheck,
   IconCreditCard,
   IconEdit,
   IconList,
@@ -327,15 +328,33 @@ export default function Home() {
     });
   }
 
+  async function handleToggleCategoryCheck(categoryId: number, nextChecked: boolean) {
+    setData((prev) => {
+      if (!prev) return prev;
+      const nextCats = prev.categories.map((c) =>
+        c.id === categoryId ? { ...c, is_checked: nextChecked } : c
+      );
+      return { ...prev, categories: nextCats };
+    });
+
+    try {
+      await toggleCategoryCheck(categoryId, month, nextChecked);
+      toast(nextChecked ? 'Categoria quitada no mês! ✓' : 'Marcação de quitada removida.');
+    } catch (err) {
+      toast((err as Error).message || 'Erro ao atualizar status', 'error');
+      loadDashboard();
+    }
+  }
+
   // Cálculos de Resumo Inteligente
   const metrics = useMemo(() => {
     if (!data) return null;
     const fixedCats = data.categories.filter((c) => c.is_fixed === 1);
     const variableCats = data.categories.filter((c) => c.is_fixed === 0);
 
-    // Quanto ainda falta gastar nas categorias fixas que não estouraram
+    // Quanto ainda falta gastar nas categorias fixas que não estouraram e não estão quitadas
     const fixedRemaining = fixedCats.reduce(
-      (acc, c) => acc + Math.max(0, c.budget_cents - c.spent_cents),
+      (acc, c) => acc + (c.is_checked ? 0 : Math.max(0, c.budget_cents - c.spent_cents)),
       0,
     );
     const porForaRemaining = data.por_fora_remaining_cents;
@@ -374,10 +393,10 @@ export default function Home() {
   const displayedFixedCats = useMemo(() => {
     if (!metrics) return [];
     if (fixedFilter === 'available') {
-      return metrics.fixedCats.filter((c) => c.spent_cents < c.budget_cents);
+      return metrics.fixedCats.filter((c) => !c.is_checked && c.spent_cents < c.budget_cents);
     }
     if (fixedFilter === 'done') {
-      return metrics.fixedCats.filter((c) => c.spent_cents >= c.budget_cents);
+      return metrics.fixedCats.filter((c) => c.is_checked || c.spent_cents >= c.budget_cents);
     }
     return metrics.fixedCats;
   }, [metrics, fixedFilter]);
@@ -776,7 +795,7 @@ export default function Home() {
                         fixedFilter === 'available' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
                       }`}
                     >
-                      Com saldo ({metrics.fixedCats.filter((c) => c.spent_cents < c.budget_cents).length})
+                      Com saldo ({metrics.fixedCats.filter((c) => !c.is_checked && c.spent_cents < c.budget_cents).length})
                     </button>
                     <button
                       type="button"
@@ -785,7 +804,7 @@ export default function Home() {
                         fixedFilter === 'done' ? 'bg-blue-500/20 text-blue-300' : 'text-zinc-400 hover:text-white'
                       }`}
                     >
-                      Quitadas ({metrics.fixedCats.filter((c) => c.spent_cents >= c.budget_cents).length})
+                      Quitadas ({metrics.fixedCats.filter((c) => c.is_checked || c.spent_cents >= c.budget_cents).length})
                     </button>
                   </div>
 
@@ -811,10 +830,12 @@ export default function Home() {
                     const left = c.budget_cents - c.spent_cents;
                     return (
                       <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
-                        <Card className="h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99]">
+                        <Card className={`h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99] ${
+                          c.is_checked ? 'border-emerald-500/30 bg-emerald-950/[0.08]' : ''
+                        }`}>
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className="truncate font-bold text-zinc-100 group-hover:text-emerald-300 transition">
                                   {c.name}
                                 </p>
@@ -831,6 +852,23 @@ export default function Home() {
                                 >
                                   <IconPlus className="h-3.5 w-3.5" />
                                 </Link>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleToggleCategoryCheck(c.id, !c.is_checked);
+                                  }}
+                                  className={`shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition active:scale-95 ${
+                                    c.is_checked
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 shadow-sm shadow-emerald-500/20'
+                                      : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 border border-white/[0.06]'
+                                  }`}
+                                  title={c.is_checked ? 'Quitada neste mês (clique para desmarcar)' : 'Marcar como quitada neste mês'}
+                                >
+                                  <IconCheck className={`h-3 w-3 ${c.is_checked ? 'text-emerald-400 stroke-[3]' : 'text-zinc-500'}`} />
+                                  <span>{c.is_checked ? 'Quitada' : 'Quitar'}</span>
+                                </button>
                               </div>
                               {c.note && (
                                 <p className="truncate text-[11px] text-zinc-500 mt-0.5" title={c.note}>
@@ -856,10 +894,20 @@ export default function Home() {
                             </span>
                             <span
                               className={`font-semibold tabular-nums ${
-                                left < 0 ? 'text-red-400' : left === 0 ? 'text-zinc-500' : 'text-emerald-400/90'
+                                c.is_checked
+                                  ? 'text-emerald-400'
+                                  : left < 0
+                                  ? 'text-red-400'
+                                  : left === 0
+                                  ? 'text-zinc-500'
+                                  : 'text-emerald-400/90'
                               }`}
                             >
-                              {left < 0
+                              {c.is_checked
+                                ? left > 0
+                                  ? `Quitada ✓ (Economia ${formatBRL(left)})`
+                                  : 'Quitada ✓'
+                                : left < 0
                                 ? `Excedeu ${formatBRL(-left)}`
                                 : left === 0
                                 ? 'Meta atingida ✓'
@@ -993,7 +1041,7 @@ export default function Home() {
                           <Card className="h-full transition-all duration-200 hover:border-purple-500/40 hover:bg-zinc-900/50 active:scale-[0.99]">
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
                                     {c.name}
                                   </p>
@@ -1005,6 +1053,23 @@ export default function Home() {
                                   >
                                     <IconPlus className="h-3.5 w-3.5" />
                                   </Link>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      handleToggleCategoryCheck(c.id, !c.is_checked);
+                                    }}
+                                    className={`shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition active:scale-95 ${
+                                      c.is_checked
+                                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 hover:bg-purple-500/30 shadow-sm shadow-purple-500/20'
+                                        : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 border border-white/[0.06]'
+                                    }`}
+                                    title={c.is_checked ? 'Quitada neste mês (clique para desmarcar)' : 'Marcar como quitada neste mês'}
+                                  >
+                                    <IconCheck className={`h-3 w-3 ${c.is_checked ? 'text-purple-400 stroke-[3]' : 'text-zinc-500'}`} />
+                                    <span>{c.is_checked ? 'Quitada' : 'Quitar'}</span>
+                                  </button>
                                 </div>
                                 <p className="text-[11px] text-zinc-500">
                                   {c.count} {c.count === 1 ? 'lançamento' : 'lançamentos'}

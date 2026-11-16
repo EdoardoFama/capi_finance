@@ -888,6 +888,27 @@ app.delete('/categories/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+app.post('/categories/:id/check', async (c) => {
+  const catId = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+  const data = await body(c);
+  const month = str(data.month, 'mês')!;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad('Mês inválido (use YYYY-MM)');
+  const isChecked = data.is_checked === true || data.is_checked === 1 ? 1 : 0;
+
+  await assertCategory(c, catId, uid);
+
+  await c.env.DB.prepare(
+    `INSERT INTO category_month_checks (user_id, category_id, month, is_checked, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT (user_id, category_id, month) DO UPDATE SET is_checked = excluded.is_checked, updated_at = datetime('now')`,
+  )
+    .bind(uid, catId, month, isChecked)
+    .run();
+
+  return c.json({ ok: true, category_id: catId, month, is_checked: isChecked === 1 });
+});
+
 // ---------- lançamentos (expenses) e contas ----------
 type AccountId = string;
 
@@ -1178,7 +1199,19 @@ app.get('/dashboard', async (c) => {
     c.env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM incomes WHERE user_id = ?').bind(uid),
   ]);
 
-  const categories = cats.results as unknown as { id: number; name: string; budget_cents: number; note: string; sort_order: number; is_fixed: number; spent_cents: number; count: number }[];
+  // Busca marcações de categorias quitadas no mês
+  const { results: checkRows } = await c.env.DB.prepare(
+    'SELECT category_id FROM category_month_checks WHERE user_id = ? AND month = ? AND is_checked = 1',
+  )
+    .bind(uid, month)
+    .all<{ category_id: number }>();
+  const checkedSet = new Set(checkRows.map((r) => r.category_id));
+
+  const rawCats = cats.results as unknown as { id: number; name: string; budget_cents: number; note: string; sort_order: number; is_fixed: number; spent_cents: number; count: number }[];
+  const categories = rawCats.map((cat) => ({
+    ...cat,
+    is_checked: checkedSet.has(cat.id),
+  }));
 
   // 1. Balances definidos pelo usuário (prioriza o mês atual, fallback para o mais recente)
   const { results: balanceRows } = await c.env.DB.prepare(
@@ -1271,7 +1304,7 @@ app.get('/dashboard', async (c) => {
   const invoiceRemainingCents = Math.max(0, ccTotalCents - ccPaidCents);
 
   const fixedRemainingCents = fixedCats.reduce(
-    (sum, cat) => sum + Math.max(0, cat.budget_cents - cat.spent_cents),
+    (sum, cat) => sum + (cat.is_checked ? 0 : Math.max(0, cat.budget_cents - cat.spent_cents)),
     0
   );
 
