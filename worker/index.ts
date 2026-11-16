@@ -25,7 +25,7 @@ import {
   applySecurityHeaders,
   verifyCsrfAndOrigin,
 } from './security';
-import { parseNubankNotification } from './nubank-parser';
+import { parseNubankNotification, cleanEstablishmentName } from './nubank-parser';
 
 type Env = {
   DB: D1Database;
@@ -2119,7 +2119,10 @@ app.post('/integrations/nubank', async (c) => {
     parsed.amount_cents = rawData.amount_cents;
   }
   if (typeof rawData.title === 'string' && rawData.title.trim() && parsed.title === 'Compra Nubank') {
-    parsed.title = rawData.title.trim();
+    parsed.title = cleanEstablishmentName(rawData.title.trim()) || 'Compra Nubank';
+  }
+  if (parsed.title) {
+    parsed.title = cleanEstablishmentName(parsed.title);
   }
 
   if (parsed.type === 'ignore' || parsed.amount_cents <= 0) {

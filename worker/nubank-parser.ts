@@ -27,6 +27,20 @@ export function parseBrlCents(raw: string): number {
   return parseInt(clean, 10) * 100;
 }
 
+export function cleanEstablishmentName(name: string): string {
+  if (!name) return '';
+  let s = name;
+  // Remove sufixos de cartão, final, modalidade e mensagens do app
+  s = s.replace(/\s+(?:para|no|com)\s+(?:o\s+)?(?:cart[aã]o\s+)?(?:virtual\s+)?(?:com\s+)?final\s+\d+.*$/i, '');
+  s = s.replace(/\s+(?:com|no)\s+(?:o\s+)?cart[aã]o(?:\s+virtual)?(?:\s+final\s+\d+)?.*$/i, '');
+  s = s.replace(/\s+final\s+\d+.*$/i, '');
+  s = s.replace(/\s+no\s+(?:cr[eé]dito|d[eé]bito).*$/i, '');
+  s = s.replace(/\s+(?:mas\s+voc[eê]\s+pode|pelo\s+app).*$/i, '');
+  s = s.replace(/^[\s\.\-_:,]+|[\s\.\-_:,]+$/g, '');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
 export function parseNubankNotification(titleInput = '', textInput = ''): ParsedNubankEvent {
   const fullText = `${titleInput} ${textInput}`.trim();
   const lower = fullText.toLowerCase();
@@ -38,6 +52,36 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     fullText.match(/R\$\s*(\d+)/i) ||
     fullText.match(/(\d+,\d{2})/i);
   const amount_cents = amountMatch ? parseBrlCents(amountMatch[1]) : 0;
+
+  // 1.1 Filtrar e ignorar compras negadas, recusadas, canceladas ou bloqueadas
+  const isDenied =
+    lower.includes('negada') ||
+    lower.includes('negado') ||
+    lower.includes('recusada') ||
+    lower.includes('recusado') ||
+    lower.includes('não autorizada') ||
+    lower.includes('nao autorizada') ||
+    lower.includes('não autorizado') ||
+    lower.includes('nao autorizado') ||
+    lower.includes('limite insuficiente') ||
+    lower.includes('não aprovada') ||
+    lower.includes('nao aprovada') ||
+    lower.includes('bloqueada') ||
+    lower.includes('bloqueado') ||
+    lower.includes('cancelada') ||
+    lower.includes('cancelado');
+
+  if (isDenied) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Compra Negada/Recusada',
+      description: 'Notificação de compra negada ou não autorizada (ignorada)',
+      payment_method: 'credit',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
 
   // 2. Se for recebimento (Inflow)
   const isInflow =
@@ -134,12 +178,14 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     // Extrair estabelecimento
     let establishment = 'Compra Nubank';
     const estabMatch =
-      fullText.match(/aprovada\s+(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:no\s+valor|com\s+o|\.|$))/i) ||
-      fullText.match(/(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s+com\s+o\s+cartão|\.|$)/i) ||
+      fullText.match(/aprovada\s+(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:no\s+valor|com\s+o|para\s+o|\.|$))/i) ||
+      fullText.match(/(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s+(?:com|para)\s+o\s+cartão|\.|$)/i) ||
       fullText.match(/estabelecimento\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+)/i);
 
     if (estabMatch && estabMatch[1].trim()) {
-      establishment = estabMatch[1].trim().replace(/\.+$/, '');
+      establishment = cleanEstablishmentName(estabMatch[1].trim());
+    } else {
+      establishment = cleanEstablishmentName(establishment);
     }
 
     return {
@@ -170,14 +216,15 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
 
   // Se não foi possível identificar padrão claro com valor
   if (amount_cents > 0) {
+    const fallbackTitle = titleInput ? cleanEstablishmentName(titleInput) : 'Lançamento Nubank';
     return {
       type: 'expense',
       amount_cents,
-      title: titleInput ? titleInput.slice(0, 120) : 'Lançamento Nubank',
+      title: (fallbackTitle || 'Lançamento Nubank').slice(0, 120),
       description: fullText.slice(0, 200),
       payment_method: 'debit',
       installments: 1,
-      category_hint: 'OUTROS',
+      category_hint: resolveCategoryHint(fallbackTitle || 'OUTROS'),
       raw_text: fullText,
     };
   }
