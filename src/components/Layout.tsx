@@ -1,13 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, Link } from 'react-router';
-import { useAuth, useConfirm } from '../context';
-import { IconCreditCard, IconHome, IconList, IconLogout, IconPlus, IconTrendingUp, IconWallet } from './ui';
+import { useAuth, useConfirm, usePrivacy } from '../context';
+import {
+  IconCalendar,
+  IconCreditCard,
+  IconEye,
+  IconEyeOff,
+  IconHome,
+  IconList,
+  IconLogout,
+  IconPlus,
+  IconTrendingUp,
+  IconWallet,
+} from './ui';
 import InstallPwaModal, { usePwaInstall } from './InstallPwaModal';
 import AutomationModal from './AutomationModal';
+import { getReminders } from '../api';
+import { scheduleRemindersNotifications } from '../notifications';
 
 const NAV = [
   { to: '/', label: 'Início', icon: IconHome, end: true },
   { to: '/orcamento', label: 'Orçamento', icon: IconWallet, end: false },
+  { to: '/calendario', label: 'Calendário', icon: IconCalendar, end: false },
   { to: '/lancar', label: 'Lançar', icon: IconPlus, end: false },
   { to: '/cartao', label: 'Cartão', icon: IconCreditCard, end: false },
   { to: '/extrato', label: 'Extrato', icon: IconList, end: false },
@@ -17,10 +31,21 @@ const NAV = [
 export default function Layout() {
   const { user, logout } = useAuth();
   const confirm = useConfirm();
+  const { isPrivate, togglePrivacy } = usePrivacy();
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const { deferredPrompt, isStandalone, isIos } = usePwaInstall();
   const initial = (user?.username?.[0] ?? 'U').toUpperCase();
+
+  // Agenda lembretes do dia para disparar notificações pontualmente
+  useEffect(() => {
+    if (!user) return;
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    getReminders(month)
+      .then((reminders) => scheduleRemindersNotifications(reminders))
+      .catch(() => {});
+  }, [user]);
 
   async function handleLogout() {
     const ok = await confirm({
@@ -93,6 +118,25 @@ export default function Layout() {
 
           {/* Perfil & Sair */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Botão Modo Privacidade (Olhinho) */}
+            <button
+              type="button"
+              onClick={togglePrivacy}
+              className={`flex h-9 w-9 items-center justify-center rounded-xl border transition active:scale-95 ${
+                isPrivate
+                  ? 'border-amber-500/40 bg-amber-500/20 text-amber-300 shadow-sm shadow-amber-500/15'
+                  : 'border-white/[0.08] bg-zinc-900/60 text-zinc-400 hover:text-white hover:bg-zinc-800'
+              }`}
+              title={
+                isPrivate
+                  ? 'Modo Privacidade ATIVO (valores borrados) — Clique para mostrar'
+                  : 'Ativar Modo Privacidade (ocultar valores na tela)'
+              }
+              aria-label="Modo Privacidade"
+            >
+              {isPrivate ? <IconEyeOff className="h-4 w-4" /> : <IconEye className="h-4 w-4" />}
+            </button>
+
             <button
               type="button"
               onClick={() => setShowAutomationModal(true)}
@@ -163,14 +207,14 @@ export default function Layout() {
 
       {/* Navegação Inferior (Mobile) */}
       <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-[#060609]/95 backdrop-blur-xl md:hidden">
-        <div className="mx-auto grid max-w-md grid-cols-6 items-center px-1 py-1.5">
+        <div className="mx-auto grid max-w-xl grid-cols-7 items-center px-1 py-1.5">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
               className={({ isActive }) =>
-                `group relative flex flex-col items-center justify-center py-1 text-[10px] transition-all ${
+                `group relative flex flex-col items-center justify-center py-1 text-[9px] transition-all ${
                   isActive ? 'text-emerald-400 font-bold' : 'text-zinc-400 hover:text-zinc-200 font-medium'
                 }`
               }
@@ -188,7 +232,7 @@ export default function Layout() {
                         : 'text-zinc-400 group-hover:text-zinc-200'
                     }`}
                   >
-                    <Icon className="h-5 w-5" />
+                    <Icon className="h-4.5 w-4.5" />
                   </div>
                   <span className="truncate leading-none mt-1">{label}</span>
                 </>

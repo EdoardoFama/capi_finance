@@ -1181,6 +1181,153 @@ app.delete('/inflows/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------- lembretes (reminders) e calendário ----------
+const REMINDER_SELECT = `SELECT r.id, r.user_id, r.title, r.date, r.time, r.amount_cents,
+  r.category_id, c.name AS category_name, r.is_completed, r.notify, r.recurrence, r.created_at
+  FROM reminders r LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = r.user_id`;
+
+app.get('/reminders', async (c) => {
+  const uid = c.get('userId');
+  const month = c.req.query('month');
+  const date = c.req.query('date');
+
+  let query = `${REMINDER_SELECT} WHERE r.user_id = ?`;
+  const params: (string | number)[] = [uid];
+
+  if (month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    const [start, end] = monthRange(month);
+    query += ' AND r.date >= ? AND r.date < ?';
+    params.push(start, end);
+  } else if (date && isDate(date)) {
+    query += ' AND r.date = ?';
+    params.push(date);
+  }
+
+  query += ' ORDER BY r.date ASC, (r.time IS NULL) ASC, r.time ASC, r.id ASC';
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
+  return c.json(results);
+});
+
+app.post('/reminders', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const title = str(data.title, 'título', { max: 120 })!;
+  const date = str(data.date, 'data')!;
+  if (!isDate(date)) bad('Data inválida (use YYYY-MM-DD)');
+
+  let time: string | null = null;
+  if (typeof data.time === 'string' && data.time.trim()) {
+    const t = data.time.trim();
+    if (!/^\d{2}:\d{2}$/.test(t)) bad('Horário inválido (use HH:MM)');
+    time = t;
+  }
+
+  const amountCents = cents(data.amount_cents, 'valor', { required: false });
+  const categoryId = typeof data.category_id === 'number' ? data.category_id : undefined;
+  if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
+
+  const notify = data.notify === 0 || data.notify === false ? 0 : 1;
+  const recurrence = data.recurrence === 'monthly' ? 'monthly' : 'none';
+
+  const res = await c.env.DB.prepare(
+    `INSERT INTO reminders (user_id, title, date, time, amount_cents, category_id, notify, recurrence)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+  )
+    .bind(uid, title, date, time, amountCents ?? null, categoryId ?? null, notify, recurrence)
+    .first<{ id: number }>();
+
+  const created = await c.env.DB.prepare(`${REMINDER_SELECT} WHERE r.id = ? AND r.user_id = ?`)
+    .bind(res!.id, uid)
+    .first();
+
+  return c.json(created, 201);
+});
+
+app.put('/reminders/:id', async (c) => {
+  const id = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+  const data = await body(c);
+
+  const existing = await c.env.DB.prepare('SELECT id FROM reminders WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .first();
+  if (!existing) bad('Lembrete não encontrado', 404);
+
+  const updates: string[] = ["updated_at = datetime('now')"];
+  const params: (string | number | null)[] = [];
+
+  if (data.title !== undefined) {
+    const title = str(data.title, 'título', { max: 120 })!;
+    updates.push('title = ?');
+    params.push(title);
+  }
+  if (data.date !== undefined) {
+    const d = str(data.date, 'data')!;
+    if (!isDate(d)) bad('Data inválida (use YYYY-MM-DD)');
+    updates.push('date = ?');
+    params.push(d);
+  }
+  if (data.time !== undefined) {
+    if (data.time === null || data.time === '') {
+      updates.push('time = NULL');
+    } else {
+      const t = str(data.time, 'horário')!;
+      if (!/^\d{2}:\d{2}$/.test(t)) bad('Horário inválido (use HH:MM)');
+      updates.push('time = ?');
+      params.push(t);
+    }
+  }
+  if (data.amount_cents !== undefined) {
+    const val = data.amount_cents === null ? null : cents(data.amount_cents, 'valor', { required: false });
+    updates.push('amount_cents = ?');
+    params.push(val ?? null);
+  }
+  if (data.category_id !== undefined) {
+    if (data.category_id === null) {
+      updates.push('category_id = NULL');
+    } else {
+      const catId = typeof data.category_id === 'number' ? data.category_id : idParam(String(data.category_id));
+      await assertCategory(c, catId, uid);
+      updates.push('category_id = ?');
+      params.push(catId);
+    }
+  }
+  if (data.is_completed !== undefined) {
+    updates.push('is_completed = ?');
+    params.push(data.is_completed === 1 || data.is_completed === true ? 1 : 0);
+  }
+  if (data.notify !== undefined) {
+    updates.push('notify = ?');
+    params.push(data.notify === 0 || data.notify === false ? 0 : 1);
+  }
+  if (data.recurrence !== undefined) {
+    updates.push('recurrence = ?');
+    params.push(data.recurrence === 'monthly' ? 'monthly' : 'none');
+  }
+
+  params.push(id, uid);
+  await c.env.DB.prepare(`UPDATE reminders SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`)
+    .bind(...params)
+    .run();
+
+  const updated = await c.env.DB.prepare(`${REMINDER_SELECT} WHERE r.id = ? AND r.user_id = ?`)
+    .bind(id, uid)
+    .first();
+
+  return c.json(updated);
+});
+
+app.delete('/reminders/:id', async (c) => {
+  const id = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+  const res = await c.env.DB.prepare('DELETE FROM reminders WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .run();
+  if (res.meta.changes === 0) bad('Lembrete não encontrado', 404);
+  return c.json({ ok: true });
+});
+
 // ---------- dashboard ----------
 app.get('/dashboard', async (c) => {
   const month = c.req.query('month') || new Date().toISOString().slice(0, 7);

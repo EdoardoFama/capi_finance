@@ -262,3 +262,47 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// ---------- Modo Privacidade (Ocultar / Borrar Valores) ----------
+type PrivacyCtx = {
+  isPrivate: boolean;
+  togglePrivacy: () => void;
+  setPrivacy: (v: boolean) => void;
+};
+const PrivacyContext = createContext<PrivacyCtx>({
+  isPrivate: false,
+  togglePrivacy: () => {},
+  setPrivacy: () => {},
+});
+export const usePrivacy = () => useContext(PrivacyContext);
+
+export function PrivacyProvider({ children }: { children: ReactNode }) {
+  const [isPrivate, setIsPrivate] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('capi:privacy') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (isPrivate) {
+        localStorage.setItem('capi:privacy', '1');
+        document.documentElement.classList.add('privacy-mode');
+      } else {
+        localStorage.setItem('capi:privacy', '0');
+        document.documentElement.classList.remove('privacy-mode');
+      }
+    } catch {}
+  }, [isPrivate]);
+
+  const togglePrivacy = useCallback(() => setIsPrivate((p) => !p), []);
+
+  return (
+    <PrivacyContext.Provider value={{ isPrivate, togglePrivacy, setPrivacy: setIsPrivate }}>
+      {children}
+    </PrivacyContext.Provider>
+  );
+}
+
+

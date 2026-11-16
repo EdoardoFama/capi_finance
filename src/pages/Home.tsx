@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { api, type Dashboard, type AccountBalance, ACCOUNT_DEFINITIONS, toggleCategoryCheck } from '../api';
+import {
+  api,
+  getReminders,
+  updateReminder,
+  type Dashboard,
+  type AccountBalance,
+  type Reminder,
+  ACCOUNT_DEFINITIONS,
+  toggleCategoryCheck,
+} from '../api';
 import { useMonth, useToast, useConfirm } from '../context';
-import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth } from '../format';
+import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth, todayISO } from '../format';
 import {
   Card,
   CollapseButton,
+  IconCalendar,
   IconCheck,
   IconCreditCard,
   IconEdit,
@@ -195,12 +205,15 @@ export default function Home() {
   const toast = useToast();
   const confirm = useConfirm();
   const [data, setData] = useState<Dashboard | null>(null);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [error, setError] = useState('');
   const [fixedFilter, setFixedFilter] = useState<'all' | 'available' | 'done'>('all');
 
   const heroCollapse = useCollapsible('home_hero', true);
   const projectionCollapse = useCollapsible('home_projection', true);
   const accountsCollapse = useCollapsible('home_accounts', true);
+  const ceilingAlertsCollapse = useCollapsible('home_ceiling_alerts', true);
+  const remindersCollapse = useCollapsible('home_reminders', true);
   const fixedCatsCollapse = useCollapsible('home_fixed_cats', true);
   const variableCatsCollapse = useCollapsible('home_variable_cats', true);
 
@@ -210,6 +223,11 @@ export default function Home() {
     api<Dashboard>(`/dashboard?month=${month}`)
       .then((d) => alive && setData(d))
       .catch((e) => alive && setError(e.message));
+
+    getReminders(month)
+      .then((r) => alive && setReminders(r))
+      .catch(() => {});
+
     return () => {
       alive = false;
     };
@@ -400,6 +418,27 @@ export default function Home() {
     }
     return metrics.fixedCats;
   }, [metrics, fixedFilter]);
+
+  // Alertas de Teto Orçamentário (>= 80% ou estouradas)
+  const ceilingAlerts = useMemo(() => {
+    if (!data) return [];
+    return data.categories
+      .filter((c) => c.budget_cents > 0 && !c.is_checked)
+      .map((c) => {
+        const pct = Math.round((c.spent_cents / c.budget_cents) * 100);
+        const diff = c.budget_cents - c.spent_cents;
+        const isBreached = pct >= 100;
+        const isWarning = pct >= 80 && pct < 100;
+        return { ...c, pct, diff, isBreached, isWarning };
+      })
+      .filter((c) => c.isBreached || c.isWarning)
+      .sort((a, b) => b.pct - a.pct);
+  }, [data]);
+
+  // Próximos lembretes pendentes
+  const upcomingReminders = useMemo(() => {
+    return reminders.filter((r) => !r.is_completed).slice(0, 3);
+  }, [reminders]);
 
   return (
     <div className="space-y-6">
@@ -744,6 +783,197 @@ export default function Home() {
                       }}
                       onDelete={() => handleDeleteUserAccount(acc)}
                     />
+                  ))}
+                </div>
+              )
+            )}
+          </section>
+
+          {/* ================= ALERTAS POR TETO ORÇAMENTÁRIO ================= */}
+          {ceilingAlerts.length > 0 && (
+            <section className="space-y-3 pt-1">
+              <div
+                className="flex items-center justify-between cursor-pointer select-none group"
+                onClick={ceilingAlertsCollapse.toggle}
+              >
+                <div className="flex items-center gap-2">
+                  <CollapseButton
+                    isOpen={ceilingAlertsCollapse.isOpen}
+                    onToggle={ceilingAlertsCollapse.toggle}
+                  />
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                    <span className="text-sm">⚠️</span>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold tracking-tight text-white group-hover:text-amber-300 transition">
+                        Alertas por Teto
+                      </h2>
+                      <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-amber-300 border border-amber-500/30">
+                        {ceilingAlerts.length} {ceilingAlerts.length === 1 ? 'alerta' : 'alertas'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      Categorias que atingiram 80% ou estouraram o teto planejado no mês
+                    </p>
+                  </div>
+                </div>
+
+                <Link
+                  to="/orcamento"
+                  className="rounded-xl border border-white/[0.08] bg-zinc-900/70 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+                >
+                  Ajustar Tetos
+                </Link>
+              </div>
+
+              {ceilingAlertsCollapse.isOpen && (
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {ceilingAlerts.map((c) => (
+                    <Link
+                      key={c.id}
+                      to={`/extrato?categoria=${c.id}`}
+                      className="group block"
+                      title={`Ver extrato de ${c.name}`}
+                    >
+                      <div
+                        className={`rounded-2xl border p-3.5 transition-all hover:bg-zinc-900/60 active:scale-[0.99] ${
+                          c.isBreached
+                            ? 'border-red-500/40 bg-red-950/[0.15] hover:border-red-500/60 shadow-sm shadow-red-500/10'
+                            : 'border-amber-500/40 bg-amber-950/[0.15] hover:border-amber-500/60 shadow-sm shadow-amber-500/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-bold text-sm text-zinc-100 group-hover:text-white truncate">
+                              {c.name}
+                            </p>
+                            <p className="text-[11px] text-zinc-400 mt-0.5 tabular-nums">
+                              {formatBRL(c.spent_cents)} de {formatBRL(c.budget_cents)}
+                            </p>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span
+                              className={`inline-block rounded-lg px-2 py-0.5 text-xs font-extrabold tabular-nums border ${
+                                c.isBreached
+                                  ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              }`}
+                            >
+                              {c.pct}%
+                            </span>
+                            <p
+                              className={`text-[10px] font-semibold mt-1 tabular-nums ${
+                                c.isBreached ? 'text-red-400' : 'text-amber-400'
+                              }`}
+                            >
+                              {c.isBreached
+                                ? `Estourou +${formatBRL(-c.diff)}`
+                                : `Resta apenas ${formatBRL(c.diff)}`}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-900">
+                          <div
+                            className={`h-full rounded-full ${
+                              c.isBreached
+                                ? 'bg-gradient-to-r from-red-500 to-rose-500'
+                                : 'bg-gradient-to-r from-amber-400 to-orange-400'
+                            }`}
+                            style={{ width: `${Math.min(100, c.pct)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ================= LEMBRETES & CALENDÁRIO ================= */}
+          <section className="space-y-3 pt-1">
+            <div
+              className="flex items-center justify-between cursor-pointer select-none group"
+              onClick={remindersCollapse.toggle}
+            >
+              <div className="flex items-center gap-2">
+                <CollapseButton
+                  isOpen={remindersCollapse.isOpen}
+                  onToggle={remindersCollapse.toggle}
+                />
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
+                  <IconCalendar className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold tracking-tight text-white group-hover:text-emerald-300 transition">
+                      Lembretes & Calendário
+                    </h2>
+                    {upcomingReminders.length > 0 && (
+                      <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-extrabold text-emerald-300 border border-emerald-500/30">
+                        {upcomingReminders.length} pendente(s)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-zinc-500">
+                    Compromissos, vencimentos de contas e lembretes com notificação
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                to="/calendario"
+                className="flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3 py-1.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/25"
+              >
+                <span>Ver Calendário</span>
+                <span>→</span>
+              </Link>
+            </div>
+
+            {remindersCollapse.isOpen && (
+              upcomingReminders.length === 0 ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-zinc-950/60 p-4 text-center">
+                  <p className="text-xs text-zinc-400">
+                    Nenhum lembrete pendente para este mês.{' '}
+                    <Link to="/calendario" className="text-emerald-400 font-bold hover:underline">
+                      Adicionar lembrete no calendário
+                    </Link>
+                    .
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-2.5 sm:grid-cols-3">
+                  {upcomingReminders.map((r) => (
+                    <div
+                      key={r.id}
+                      className="rounded-2xl border border-white/[0.08] bg-zinc-900/50 p-3.5 flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 text-[11px]">
+                          <span className="font-bold text-emerald-400 tabular-nums">
+                            {r.date.split('-')[2]}/{r.date.split('-')[1]}
+                            {r.date === todayISO() ? ' (Hoje!)' : ''}
+                          </span>
+                          {r.time && <span className="text-zinc-500 font-medium">🕒 {r.time}</span>}
+                        </div>
+                        <p className="font-bold text-xs text-white mt-1 truncate">{r.title}</p>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between pt-2 border-t border-white/[0.06]">
+                        <span className="text-xs font-extrabold text-zinc-200 tabular-nums">
+                          {r.amount_cents ? formatBRL(r.amount_cents) : '—'}
+                        </span>
+                        <Link
+                          to="/calendario"
+                          className="text-[10px] font-bold text-emerald-400 hover:underline"
+                        >
+                          Ver no dia →
+                        </Link>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )

@@ -65,3 +65,16 @@ input::-webkit-inner-spin-button {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Modo Privacidade (Borra valores monetários e números sensíveis) */
+html.privacy-mode .tabular-nums,
+html.privacy-mode [data-privacy="true"] {
+  filter: blur(7px);
+  user-select: none;
+  transition: filter 0.15s ease-in-out;
+}
+html.privacy-mode .tabular-nums:hover,
+html.privacy-mode [data-privacy="true"]:hover {
+  filter: blur(0px);
+}
+

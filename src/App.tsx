@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Home from './pages/Home';
 import Budget from './pages/Budget';
+import CalendarPage from './pages/Calendar';
 import Expenses from './pages/Expenses';
 import CreditCard from './pages/CreditCard';
 import History from './pages/History';
@@ -18,6 +19,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="orcamento" element={<Budget />} />
+        <Route path="calendario" element={<CalendarPage />} />
         <Route path="lancar" element={<Expenses />} />
         <Route path="cartao" element={<CreditCard />} />
         <Route path="extrato" element={<History />} />

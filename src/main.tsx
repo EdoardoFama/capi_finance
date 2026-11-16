@@ -2,7 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import App from './App';
-import { AuthProvider, ConfirmProvider, MonthProvider, ToastProvider } from './context';
+import { AuthProvider, ConfirmProvider, MonthProvider, PrivacyProvider, ToastProvider } from './context';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
@@ -10,11 +10,13 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <ToastProvider>
         <ConfirmProvider>
-          <AuthProvider>
-            <MonthProvider>
-              <App />
-            </MonthProvider>
-          </AuthProvider>
+          <PrivacyProvider>
+            <AuthProvider>
+              <MonthProvider>
+                <App />
+              </MonthProvider>
+            </AuthProvider>
+          </PrivacyProvider>
         </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>

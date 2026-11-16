@@ -255,3 +255,51 @@ export const toggleCategoryCheck = (id: number, month: string, is_checked: boole
     body: { month, is_checked },
   });
 
+export type Reminder = {
+  id: number;
+  user_id: number;
+  title: string;
+  date: string;
+  time: string | null;
+  amount_cents: number | null;
+  category_id: number | null;
+  category_name?: string | null;
+  is_completed: number;
+  notify: number;
+  recurrence: 'none' | 'monthly';
+  created_at: string;
+};
+
+export const getReminders = (month?: string, date?: string) => {
+  const query = month ? `?month=${month}` : date ? `?date=${date}` : '';
+  return api<Reminder[]>(`/reminders${query}`);
+};
+
+export const createReminder = (data: {
+  title: string;
+  date: string;
+  time?: string | null;
+  amount_cents?: number | null;
+  category_id?: number | null;
+  notify?: boolean | number;
+  recurrence?: 'none' | 'monthly';
+}) => api<Reminder>('/reminders', { method: 'POST', body: data });
+
+export const updateReminder = (
+  id: number,
+  data: Partial<{
+    title: string;
+    date: string;
+    time: string | null;
+    amount_cents: number | null;
+    category_id: number | null;
+    is_completed: number | boolean;
+    notify: number | boolean;
+    recurrence: 'none' | 'monthly';
+  }>,
+) => api<Reminder>(`/reminders/${id}`, { method: 'PUT', body: data });
+
+export const deleteReminder = (id: number) =>
+  api<{ ok: boolean }>(`/reminders/${id}`, { method: 'DELETE' });
+
+
