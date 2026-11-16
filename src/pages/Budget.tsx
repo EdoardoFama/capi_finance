@@ -1,8 +1,20 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, type Category, type Income } from '../api';
+import {
+  api,
+  createSavingsGoal,
+  deleteSavingsGoal,
+  getCategoryIcon,
+  getSavingsGoals,
+  playSuccessSound,
+  reorderCategories,
+  updateSavingsGoal,
+  type Category,
+  type Income,
+  type SavingsGoal,
+} from '../api';
 import { useToast, useConfirm } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL } from '../format';
-import { Card, CollapseButton, IconPlus, IconTrash, Input, PageTitle, Spinner, useCollapsible } from '../components/ui';
+import { Card, CollapseButton, IconPlus, IconTrash, Input, PageTitle, ProgressBar, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 /* =========================================================
@@ -89,21 +101,26 @@ function CategoryRow({
   totalIncome,
   onSave,
   onDelete,
+  onMove,
 }: {
   item: Category;
   totalIncome: number;
-  onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string; is_fixed?: number }) => Promise<void>;
+  onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string; is_fixed?: number; icon?: string }) => Promise<void>;
   onDelete: (id: number, name: string) => void;
+  onMove?: (dir: -1 | 1) => void;
 }) {
   const [name, setName] = useState(item.name);
   const [budget, setBudget] = useState(centsToInput(item.budget_cents));
   const [note, setNote] = useState(item.note);
+  const [icon, setIcon] = useState(item.icon || '');
+  const [pickingIcon, setPickingIcon] = useState(false);
   const isFixed = item.is_fixed === undefined ? 1 : Number(item.is_fixed);
 
   useEffect(() => {
     setName(item.name);
     setBudget(centsToInput(item.budget_cents));
     setNote(item.note);
+    setIcon(item.icon || '');
   }, [item]);
 
   async function commitName() {
@@ -143,6 +160,38 @@ function CategoryRow({
   return (
     <div className="py-3 space-y-2 transition hover:bg-zinc-900/35 px-2.5 rounded-2xl">
       <div className="flex items-center gap-2">
+        {/* Item 27: Botões de Reordenação */}
+        {onMove && (
+          <div className="flex flex-col gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => onMove(-1)}
+              className="rounded bg-zinc-900 px-1.5 py-0.5 text-[9px] text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              title="Mover para cima"
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              onClick={() => onMove(1)}
+              className="rounded bg-zinc-900 px-1.5 py-0.5 text-[9px] text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              title="Mover para baixo"
+            >
+              ▼
+            </button>
+          </div>
+        )}
+
+        {/* Item 28: Ícone da Categoria */}
+        <button
+          type="button"
+          onClick={() => setPickingIcon((p) => !p)}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900 text-base hover:border-emerald-500/40 transition"
+          title="Clique para personalizar o ícone desta categoria"
+        >
+          {getCategoryIcon(name, icon)}
+        </button>
+
         {/* Botão de Alternar Fixa / Variável */}
         <button
           type="button"
@@ -231,6 +280,27 @@ function CategoryRow({
           </span>
         )}
       </div>
+
+      {/* Item 28: Seletor de Ícones Personalizados */}
+      {pickingIcon && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900 p-2.5 ml-2 sm:ml-14">
+          <span className="text-[10px] font-bold text-zinc-400 mr-1">Ícone:</span>
+          {['🏢', '⚡', '🌐', '📱', '🔥', '🛒', '💊', '⛽', '🚗', '📈', '💜', '🍔', '🎬', '💈', '👕', '🎮', '📚', '🐾', '✈️', '🏷️'].map((emo) => (
+            <button
+              key={emo}
+              type="button"
+              onClick={async () => {
+                setIcon(emo);
+                setPickingIcon(false);
+                await onSave(item.id, { icon: emo });
+              }}
+              className="rounded-lg bg-zinc-800 p-1.5 text-sm hover:bg-emerald-500/20 hover:scale-110 transition"
+            >
+              {emo}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -410,9 +480,18 @@ export default function Budget() {
   const confirm = useConfirm();
   const [incomes, setIncomes] = useState<Income[] | null>(null);
   const [cats, setCats] = useState<Category[] | null>(null);
+  const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [catFilter, setCatFilter] = useState<'all' | 'fixed' | 'variable'>('all');
 
+  // Estados para criar Cofre / Meta de Reserva (Item 23)
+  const [goalName, setGoalName] = useState('');
+  const [goalTarget, setGoalTarget] = useState('');
+  const [goalCurrent, setGoalCurrent] = useState('');
+  const [goalIcon, setGoalIcon] = useState('🎯');
+  const [depositInputs, setDepositInputs] = useState<Record<number, string>>({});
+
   const summaryCollapse = useCollapsible('budget_summary', true);
+  const goalsCollapse = useCollapsible('budget_goals', true);
   const incomesCollapse = useCollapsible('budget_incomes', true);
   const catsCollapse = useCollapsible('budget_categories', true);
 
@@ -424,13 +503,69 @@ export default function Budget() {
   }, [cats]);
 
   useEffect(() => {
-    Promise.all([api<Income[]>('/incomes'), api<Category[]>('/categories')])
-      .then(([i, c]) => {
+    Promise.all([api<Income[]>('/incomes'), api<Category[]>('/categories'), getSavingsGoals()])
+      .then(([i, c, g]) => {
         setIncomes(i);
         setCats(c);
+        setGoals(g);
       })
       .catch((e) => toast(e.message, 'error'));
   }, [toast]);
+
+  // Item 27: Reordenar categorias
+  async function handleMoveCategory(catId: number, dir: -1 | 1) {
+    if (!cats) return;
+    const idx = cats.findIndex((c) => c.id === catId);
+    if (idx < 0) return;
+    const targetIdx = idx + dir;
+    if (targetIdx < 0 || targetIdx >= cats.length) return;
+    const next = [...cats];
+    const [moved] = next.splice(idx, 1);
+    next.splice(targetIdx, 0, moved);
+    setCats(next);
+    try {
+      await reorderCategories(next.map((c) => c.id));
+    } catch {
+      toast('Erro ao salvar ordem das categorias', 'error');
+    }
+  }
+
+  // Item 23: Criar novo Cofre / Meta
+  async function handleCreateGoal(e: FormEvent) {
+    e.preventDefault();
+    if (!goalName.trim()) return toast('Informe o nome da meta/cofre', 'error');
+    const targetCents = parseBRL(goalTarget || '0') ?? 0;
+    const currentCents = parseBRL(goalCurrent || '0') ?? 0;
+    try {
+      const created = await createSavingsGoal({
+        name: goalName.trim(),
+        icon: goalIcon,
+        target_cents: targetCents,
+        current_cents: currentCents,
+      });
+      setGoals((prev) => [...prev, created]);
+      setGoalName('');
+      setGoalTarget('');
+      setGoalCurrent('');
+      playSuccessSound('coin');
+      toast('Cofre / Meta criada com sucesso! 🎯');
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function handleAddGoalAmount(goal: SavingsGoal, centsToAdd: number) {
+    if (!centsToAdd || centsToAdd <= 0) return toast('Informe um valor válido', 'error');
+    try {
+      const upd = await updateSavingsGoal(goal.id, { add_cents: centsToAdd });
+      setGoals((prev) => prev.map((g) => (g.id === goal.id ? upd : g)));
+      setDepositInputs((prev) => ({ ...prev, [goal.id]: '' }));
+      playSuccessSound('coin');
+      toast(`+${formatBRL(centsToAdd)} guardado em "${goal.name}"!`);
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
 
   const run = async <R,>(fn: () => Promise<R>, ok?: string) => {
     try {
@@ -685,6 +820,7 @@ export default function Budget() {
                   key={c.id}
                   item={c}
                   totalIncome={totalIncome}
+                  onMove={(dir) => handleMoveCategory(c.id, dir)}
                   onSave={async (id, patch) => {
                     const isTypeChange = patch.is_fixed !== undefined;
                     const message = isTypeChange
@@ -726,6 +862,165 @@ export default function Budget() {
               }}
             />
           </>
+        )}
+      </Card>
+
+      {/* ================= ITENS 22 & 23: COFRES, METAS DE RESERVA & SONHOS ================= */}
+      <Card>
+        <div
+          className={`flex items-center justify-between ${
+            goalsCollapse.isOpen ? 'mb-3 border-b border-white/[0.06] pb-3.5' : ''
+          } cursor-pointer select-none group`}
+          onClick={goalsCollapse.toggle}
+        >
+          <div className="flex items-center gap-2.5">
+            <CollapseButton
+              isOpen={goalsCollapse.isOpen}
+              onToggle={goalsCollapse.toggle}
+            />
+            <div>
+              <h2 className="font-bold text-base text-white group-hover:text-emerald-300 transition flex items-center gap-2">
+                <span>🎯</span> Cofres & Metas de Reserva ("Sobra vira Meta")
+              </h2>
+              <p className="text-xs text-zinc-500">
+                Crie cofres para sonhos, reserva de emergência ou transfira a economia de categorias quitadas
+              </p>
+            </div>
+          </div>
+          <span className="rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-xs font-extrabold text-emerald-300 tabular-nums">
+            {formatBRL(goals.reduce((s, g) => s + g.current_cents, 0))} guardado
+          </span>
+        </div>
+
+        {goalsCollapse.isOpen && (
+          <div className="space-y-4">
+            {goals.length === 0 ? (
+              <p className="py-4 text-center text-xs text-zinc-500 border border-dashed border-white/10 rounded-xl">
+                Nenhum cofre/meta criado ainda. Crie seu primeiro abaixo!
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {goals.map((g) => {
+                  const pct = g.target_cents > 0 ? Math.min(100, Math.round((g.current_cents / g.target_cents) * 100)) : 100;
+                  return (
+                    <div
+                      key={g.id}
+                      className="rounded-2xl border border-white/[0.08] bg-zinc-900/50 p-4 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-lg">
+                            {g.icon || '🎯'}
+                          </span>
+                          <div>
+                            <h3 className="text-sm font-extrabold text-white">{g.name}</h3>
+                            <p className="text-xs text-zinc-400 tabular-nums">
+                              <strong className="text-emerald-300">{formatBRL(g.current_cents)}</strong> de{' '}
+                              {formatBRL(g.target_cents)} ({pct}%)
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: 'Excluir Cofre/Meta?',
+                              message: `Deseja excluir a meta "${g.name}"?`,
+                              confirmText: 'Excluir',
+                              cancelText: 'Cancelar',
+                              variant: 'danger',
+                            });
+                            if (!ok) return;
+                            await deleteSavingsGoal(g.id);
+                            setGoals((prev) => prev.filter((x) => x.id !== g.id));
+                            toast('Meta removida');
+                          }}
+                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-500/10 hover:text-red-400"
+                        >
+                          <IconTrash className="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      <ProgressBar spent={g.current_cents} budget={g.target_cents || 1} className="h-2" />
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="Guardar + R$ 0,00"
+                          value={depositInputs[g.id] || ''}
+                          onChange={(e) =>
+                            setDepositInputs((prev) => ({
+                              ...prev,
+                              [g.id]: formatCurrencyInput(e.target.value),
+                            }))
+                          }
+                          className="flex-1 rounded-xl border border-white/10 bg-black/50 px-3 py-1.5 text-xs text-white placeholder:text-zinc-600 outline-none focus:border-emerald-400 tabular-nums"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddGoalAmount(g, parseBRL(depositInputs[g.id] || '0') ?? 0)}
+                          className="rounded-xl bg-emerald-400 px-3 py-1.5 text-xs font-extrabold text-black hover:bg-emerald-300"
+                        >
+                          + Guardar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <form
+              onSubmit={handleCreateGoal}
+              className="rounded-2xl border border-dashed border-white/15 bg-zinc-900/30 p-3.5 space-y-3"
+            >
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 block">
+                Criar Novo Cofre / Meta de Sonho
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                <div className="flex items-center gap-1.5 sm:col-span-2">
+                  <select
+                    value={goalIcon}
+                    onChange={(e) => setGoalIcon(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-zinc-900 px-2.5 py-2 text-sm"
+                  >
+                    {['🎯', '✈️', '🏠', '🚗', '🛡️', '💻', '💍', '📈'].map((ic) => (
+                      <option key={ic} value={ic}>
+                        {ic}
+                      </option>
+                    ))}
+                  </select>
+                  <Input
+                    placeholder="Ex: Viagem, Reserva de Emergência..."
+                    value={goalName}
+                    onChange={(e) => setGoalName(e.target.value)}
+                  />
+                </div>
+                <Input
+                  placeholder="Meta Total R$ (ex: 5.000,00)"
+                  inputMode="decimal"
+                  value={goalTarget}
+                  onChange={(e) => setGoalTarget(formatCurrencyInput(e.target.value))}
+                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Já tenho R$ (opcional)"
+                    inputMode="decimal"
+                    value={goalCurrent}
+                    onChange={(e) => setGoalCurrent(formatCurrencyInput(e.target.value))}
+                  />
+                  <button
+                    type="submit"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400 text-black font-bold hover:bg-emerald-300"
+                    title="Criar Cofre"
+                  >
+                    <IconPlus className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
         )}
       </Card>
     </div>

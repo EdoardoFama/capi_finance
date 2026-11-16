@@ -78,3 +78,62 @@ html.privacy-mode [data-privacy="true"]:hover {
   filter: blur(0px);
 }
 
+/* Item 77: Modo Preto Puro (OLED / True Black) */
+html.oled-mode body {
+  background-color: #000000 !important;
+  background-image: none !important;
+}
+html.oled-mode .bg-zinc-950,
+html.oled-mode .bg-zinc-950\/90,
+html.oled-mode .bg-zinc-950\/80 {
+  background-color: #000000 !important;
+}
+html.oled-mode .bg-zinc-900\/70,
+html.oled-mode .bg-zinc-900\/60,
+html.oled-mode .bg-zinc-900\/50,
+html.oled-mode .bg-zinc-900\/40 {
+  background-color: #050507 !important;
+}
+
+/* Item 96: Temas de Cor de Destaque Personalizados */
+html[data-accent="purple"] {
+  filter: hue-rotate(115deg) saturate(1.1);
+}
+html[data-accent="purple"] img {
+  filter: hue-rotate(-115deg);
+}
+html[data-accent="ocean"] {
+  filter: hue-rotate(42deg);
+}
+html[data-accent="ocean"] img {
+  filter: hue-rotate(-42deg);
+}
+html[data-accent="gold"] {
+  filter: hue-rotate(-115deg) saturate(1.15);
+}
+html[data-accent="gold"] img {
+  filter: hue-rotate(115deg);
+}
+html[data-accent="rose"] {
+  filter: hue-rotate(165deg) saturate(1.1);
+}
+html[data-accent="rose"] img {
+  filter: hue-rotate(-165deg);
+}
+
+/* Item 76: Animações suaves de transição de página */
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-page-in {
+  animation: pageFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+

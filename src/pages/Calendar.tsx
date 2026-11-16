@@ -5,6 +5,7 @@ import {
   createReminder,
   deleteReminder,
   getReminders,
+  playSuccessSound,
   updateReminder,
   type Category,
   type Expense,
@@ -22,6 +23,7 @@ import {
   Spinner,
 } from '../components/ui';
 import {
+  buildGoogleCalendarUrl,
   isNotificationSupported,
   requestNotificationPermission,
   scheduleRemindersNotifications,
@@ -77,6 +79,9 @@ export default function CalendarPage() {
   const [hasNotifPermission, setHasNotifPermission] = useState<boolean>(() => {
     return isNotificationSupported() && Notification.permission === 'granted';
   });
+
+  // Item 35: Alternador entre Grade Mensal e Modo Lista / Agenda
+  const [viewMode, setViewMode] = useState<'grid' | 'agenda'>('grid');
 
   // Atualiza data selecionada quando o mês muda
   useEffect(() => {
@@ -317,6 +322,11 @@ export default function CalendarPage() {
     return reminders.filter((r) => r.is_completed).length;
   }, [reminders]);
 
+  // Item 38: Contas vencidas / em atraso
+  const overdueReminders = useMemo(() => {
+    return reminders.filter((r) => !r.is_completed && r.date < today);
+  }, [reminders, today]);
+
   // Formata data selecionada por extenso (ex: "Segunda-feira, 16 de Novembro")
   const selectedDateFormatted = useMemo(() => {
     if (!selectedDate) return '';
@@ -374,6 +384,28 @@ export default function CalendarPage() {
             </button>
           </div>
 
+          {/* Item 35: Alternador de Visualização (Grade vs Agenda) */}
+          <div className="flex rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`rounded-xl px-2.5 py-1 font-bold transition ${
+                viewMode === 'grid' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              📅 Grade
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('agenda')}
+              className={`rounded-xl px-2.5 py-1 font-bold transition ${
+                viewMode === 'agenda' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              📋 Agenda
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={handleEnableNotifications}
@@ -393,6 +425,48 @@ export default function CalendarPage() {
           </button>
         </div>
       </div>
+
+      {/* Item 38 & 37: Alerta de Contas Vencidas + Confirmação Rápida de Pagamento */}
+      {overdueReminders.length > 0 && (
+        <div className="rounded-2xl border border-red-500/40 bg-red-950/30 p-4 space-y-2.5 shadow-lg shadow-red-500/10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🚨</span>
+              <h3 className="text-xs sm:text-sm font-extrabold text-red-200">
+                Atenção: {overdueReminders.length} {overdueReminders.length === 1 ? 'conta em atraso' : 'contas em atraso'} neste mês!
+              </h3>
+            </div>
+            <span className="text-[11px] text-red-300/80">Confirme o pagamento em 1 clique abaixo</span>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {overdueReminders.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center justify-between gap-2 rounded-xl border border-red-500/30 bg-black/40 p-2.5 text-xs"
+              >
+                <div className="min-w-0">
+                  <p className="font-bold text-white truncate">{r.title}</p>
+                  <p className="text-[10px] text-red-300 tabular-nums">
+                    Venceu em {r.date.split('-')[2]}/{r.date.split('-')[1]}
+                    {r.amount_cents ? ` • ${formatBRL(r.amount_cents)}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playSuccessSound('check');
+                    handleToggleCompleted(r);
+                  }}
+                  className="shrink-0 rounded-xl bg-emerald-400 px-3 py-1.5 text-[11px] font-extrabold text-black hover:bg-emerald-300 transition active:scale-95"
+                >
+                  ✓ Marcar como Pago
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Resumo do Mês */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -437,8 +511,99 @@ export default function CalendarPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* ================= GRADE DO CALENDÁRIO (7 COLUNAS) ================= */}
+          {/* ================= GRADE DO CALENDÁRIO OU MODO AGENDA (ITEM 35) ================= */}
           <div className="lg:col-span-7 xl:col-span-8">
+            {viewMode === 'agenda' ? (
+              <Card className="p-4 sm:p-5 space-y-4 border-white/[0.08] bg-zinc-950/80">
+                <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-white">📋 Visão em Lista / Agenda Cronológica</h3>
+                    <p className="text-[11px] text-zinc-400">Todos os lembretes e vencimentos de {monthLabel(month)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenNewReminder(selectedDate)}
+                    className="rounded-xl bg-emerald-400 px-3 py-1.5 text-xs font-extrabold text-black hover:bg-emerald-300"
+                  >
+                    + Novo Lembrete
+                  </button>
+                </div>
+
+                {reminders.length === 0 ? (
+                  <p className="py-12 text-center text-xs text-zinc-500">
+                    Nenhum lembrete cadastrado neste mês.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {reminders.map((r) => (
+                      <div
+                        key={r.id}
+                        onClick={() => setSelectedDate(r.date)}
+                        className={`cursor-pointer flex items-center justify-between gap-3 rounded-2xl border p-3.5 transition ${
+                          r.is_completed
+                            ? 'border-emerald-500/20 bg-emerald-950/10 opacity-75'
+                            : r.date < today
+                            ? 'border-red-500/40 bg-red-950/20'
+                            : 'border-white/[0.08] bg-zinc-900/50 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              playSuccessSound('check');
+                              handleToggleCompleted(r);
+                            }}
+                            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition ${
+                              r.is_completed
+                                ? 'border-emerald-400 bg-emerald-400 text-black'
+                                : 'border-white/20 bg-zinc-900 text-transparent hover:border-emerald-400'
+                            }`}
+                          >
+                            <IconCheck className="h-3.5 w-3.5 stroke-[3]" />
+                          </button>
+
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300 tabular-nums">
+                                {r.date.split('-')[2]}/{r.date.split('-')[1]}
+                              </span>
+                              <p className={`text-xs font-bold truncate ${r.is_completed ? 'line-through text-zinc-400' : 'text-white'}`}>
+                                {r.title}
+                              </p>
+                            </div>
+                            <p className="text-[10px] text-zinc-400 mt-0.5">
+                              {r.time ? `🕒 ${r.time} • ` : ''}
+                              {r.category_name || 'Sem categoria'}
+                              {r.recurrence === 'monthly' ? ' • 🔁 Mensal' : ''}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {r.amount_cents ? (
+                            <span className="text-xs font-extrabold text-white tabular-nums">
+                              {formatBRL(r.amount_cents)}
+                            </span>
+                          ) : null}
+                          <a
+                            href={buildGoogleCalendarUrl(r)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="rounded-lg border border-blue-500/30 bg-blue-500/15 px-2 py-1 text-[10px] font-bold text-blue-300 hover:bg-blue-500/25"
+                            title="Sincronizar com Google Calendar"
+                          >
+                            📅 Google
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            ) : (
             <Card className="p-3 sm:p-5 overflow-hidden border-white/[0.08] shadow-2xl bg-zinc-950/80">
               {/* Dias da Semana (DOM, SEG...) */}
               <div className="grid grid-cols-7 gap-1 text-center mb-2">
@@ -580,6 +745,7 @@ export default function CalendarPage() {
                 </button>
               </div>
             </Card>
+            )}
           </div>
 
           {/* ================= PAINEL DO DIA SELECIONADO ================= */}
@@ -830,6 +996,17 @@ export default function CalendarPage() {
                             ) : null}
 
                             <div className="mt-1 flex items-center justify-end gap-1">
+                              {/* Item 33: Sincronizar com Google Calendar */}
+                              <a
+                                href={buildGoogleCalendarUrl(r)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="rounded p-1 text-[10px] font-bold text-blue-400 hover:bg-blue-500/20 transition"
+                                title="Adicionar ao Google Calendar"
+                              >
+                                📅 Google
+                              </a>
+
                               {/* Botão de Lançar no Extrato */}
                               <button
                                 type="button"

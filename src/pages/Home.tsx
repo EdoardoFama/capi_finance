@@ -2,14 +2,19 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link } from 'react-router';
 import {
   api,
+  createSavingsGoal,
+  getCategoryIcon,
   getReminders,
+  playSuccessSound,
+  toggleCategoryCheck,
   updateReminder,
+  updateSavingsGoal,
   type Dashboard,
   type AccountBalance,
   type Reminder,
   ACCOUNT_DEFINITIONS,
-  toggleCategoryCheck,
 } from '../api';
+import { notifyCeilingAlerts } from '../notifications';
 import { useMonth, useToast, useConfirm } from '../context';
 import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth, todayISO } from '../format';
 import {
@@ -221,7 +226,12 @@ export default function Home() {
     let alive = true;
     setError('');
     api<Dashboard>(`/dashboard?month=${month}`)
-      .then((d) => alive && setData(d))
+      .then((d) => {
+        if (alive) {
+          setData(d);
+          notifyCeilingAlerts(d.categories, month);
+        }
+      })
       .catch((e) => alive && setError(e.message));
 
     getReminders(month)
@@ -356,11 +366,62 @@ export default function Home() {
     });
 
     try {
-      await toggleCategoryCheck(categoryId, month, nextChecked);
+      await toggleCategoryCheck(categoryId, month, nextChecked, undefined);
+      if (nextChecked) playSuccessSound('check');
       toast(nextChecked ? 'Categoria quitada no mês! ✓' : 'Marcação de quitada removida.');
     } catch (err) {
       toast((err as Error).message || 'Erro ao atualizar status', 'error');
       loadDashboard();
+    }
+  }
+
+  // Item 29: Travar / Desbloquear Categoria que estourou o teto
+  async function handleToggleCategoryUnlock(categoryId: number, nextUnlocked: boolean) {
+    setData((prev) => {
+      if (!prev) return prev;
+      const nextCats = prev.categories.map((c) =>
+        c.id === categoryId ? { ...c, is_unlocked: nextUnlocked } : c
+      );
+      return { ...prev, categories: nextCats };
+    });
+
+    try {
+      await toggleCategoryCheck(categoryId, month, undefined, nextUnlocked);
+      playSuccessSound('unlock');
+      toast(
+        nextUnlocked
+          ? '🔓 Cadeado desbloqueado! Categoria liberada para novos gastos.'
+          : '🔒 Categoria travada novamente no teto.',
+      );
+    } catch (err) {
+      toast((err as Error).message || 'Erro ao atualizar cadeado', 'error');
+      loadDashboard();
+    }
+  }
+
+  // Item 22: Rollover de Saldo Não Gasto ("Sobra vira Meta")
+  async function handleRolloverSavings(categoryName: string, savedCents: number) {
+    if (!data || savedCents <= 0) return;
+    try {
+      const goals = data.savings_goals ?? [];
+      if (goals.length > 0) {
+        const firstGoal = goals[0];
+        await updateSavingsGoal(firstGoal.id, { add_cents: savedCents });
+        playSuccessSound('coin');
+        toast(`🎯 Economia de ${formatBRL(savedCents)} (${categoryName}) guardada no cofre "${firstGoal.name}"!`);
+      } else {
+        await createSavingsGoal({
+          name: 'Cofre de Economias Mensais',
+          icon: '🐷',
+          target_cents: 500000,
+          current_cents: savedCents,
+        });
+        playSuccessSound('coin');
+        toast(`🐷 Cofre de Economias criado com +${formatBRL(savedCents)} da sobra de ${categoryName}!`);
+      }
+      loadDashboard();
+    } catch (err) {
+      toast((err as Error).message, 'error');
     }
   }
 
@@ -442,8 +503,23 @@ export default function Home() {
 
   return (
     <div className="space-y-6">
-      {/* Seletor de Mês */}
-      <MonthPicker />
+      {/* Seletor de Mês + Botão Refresh Rápido (Item 74) */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <MonthPicker />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            loadDashboard();
+            toast('Dados atualizados! ↻');
+          }}
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/[0.08] bg-zinc-950/90 text-zinc-300 shadow-lg hover:bg-zinc-900 hover:text-emerald-400 active:scale-95 transition"
+          title="Atualizar dados agora"
+        >
+          ↻
+        </button>
+      </div>
 
       {error && (
         <div className="rounded-2xl border border-red-500/30 bg-red-950/40 p-4 text-sm text-red-300">
@@ -454,6 +530,86 @@ export default function Home() {
 
       {data && metrics && (
         <>
+          {/* ================= ITENS 69, 70, 78, 93: MASCOTE CAPI REATIVO, SCORE DE SAÚDE (0-100) & INSIGHTS IA ================= */}
+          {(() => {
+            const breachedCount = ceilingAlerts.filter((a) => a.isBreached).length;
+            const warningCount = ceilingAlerts.filter((a) => a.isWarning).length;
+            const surplus = data.projection?.predicted_surplus_cents ?? 0;
+
+            // Cálculo do Score Capi (0 a 100)
+            let score = 85;
+            if (totalPct <= 70) score += 10;
+            else if (totalPct > 100) score -= 25;
+            else if (totalPct > 85) score -= 10;
+            score -= breachedCount * 8;
+            score -= warningCount * 3;
+            if (surplus > 0) score += 5;
+            score = Math.max(15, Math.min(100, score));
+
+            // Humor do Mascote Capi (Item 93)
+            const mascot =
+              score >= 85
+                ? { emoji: '🦫✨', mood: 'Capi Investidora', color: 'text-emerald-300', msg: 'Suas finanças estão impecáveis! Ritmo excelente para multiplicar patrimônio.' }
+                : score >= 65
+                ? { emoji: '🦫😎', mood: 'Capi Tranquila', color: 'text-teal-300', msg: 'Orçamento sob controle! Continue acompanhando seus tetos semanais.' }
+                : score >= 45
+                ? { emoji: '🦫😅', mood: 'Capi Atenta', color: 'text-amber-300', msg: 'Atenção redobrada! Algumas categorias já passaram de 80% do teto.' }
+                : { emoji: '🦫🚨', mood: 'Capi Preocupada', color: 'text-red-300', msg: 'Hora de segurar o freio! Revise os gastos variáveis para proteger seu fechamento.' };
+
+            // Sugestão Inteligente de Economia (Item 70)
+            const topCat = [...data.categories].sort((a, b) => b.spent_cents - a.spent_cents)[0];
+            const aiTip = topCat && topCat.spent_cents > 0
+              ? `Maior concentração do mês: ${topCat.name} (${formatBRL(topCat.spent_cents)}). ${
+                  metrics.dailyPorFora > 0
+                    ? `Seu limite seguro no "Por Fora" é de ${formatBRL(metrics.dailyPorFora)}/dia pelos próximos ${metrics.daysLeft} dias.`
+                    : 'Evite novos gastos variáveis para preservar sua margem.'
+                }`
+              : 'Lance seus gastos ou ative o webhook Nubank para receber diagnósticos automáticos.';
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                {/* Mascote + Diagnóstico IA */}
+                <div className="md:col-span-8 flex items-center gap-3.5 rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-3.5 shadow-lg">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-2xl">
+                    {mascot.emoji}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-xs font-black uppercase tracking-wider ${mascot.color}`}>
+                        {mascot.mood}
+                      </span>
+                      <span className="text-[11px] text-zinc-400">• {mascot.msg}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-zinc-300 truncate" title={aiTip}>
+                      💡 <strong className="text-emerald-300">IA Insight:</strong> {aiTip}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Score Capi de Saúde Financeira (Item 69) */}
+                <div className="md:col-span-4 flex items-center justify-between rounded-2xl border border-white/[0.08] bg-zinc-950/90 px-4 py-3 shadow-lg">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+                      Score Saúde Capi
+                    </span>
+                    <span className="text-xs font-semibold text-zinc-300">
+                      {score >= 80 ? 'Excelente' : score >= 60 ? 'Saudável' : 'Requer Atenção'}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                    <span
+                      className={`text-2xl font-black tabular-nums ${
+                        score >= 80 ? 'text-emerald-400' : score >= 60 ? 'text-amber-300' : 'text-red-400'
+                      }`}
+                    >
+                      {score}
+                    </span>
+                    <span className="text-xs text-zinc-500 font-bold">/100</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           {/* ================= HERO CARD: VISÃO EXECUTIVA DO MÊS ================= */}
           <div className="relative overflow-hidden rounded-3xl border border-white/[0.09] bg-gradient-to-br from-zinc-900/95 via-zinc-950 to-black p-5 sm:p-6 shadow-2xl">
             <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-emerald-500/10 blur-3xl" />
@@ -1058,14 +1214,22 @@ export default function Home() {
                   {displayedFixedCats.map((c) => {
                     const pct = percent(c.spent_cents, c.budget_cents);
                     const left = c.budget_cents - c.spent_cents;
+                    const isOverBudget = c.budget_cents > 0 && c.spent_cents >= c.budget_cents;
+                    const isLocked = isOverBudget && !c.is_unlocked;
                     return (
                       <Link key={c.id} to={`/extrato?categoria=${c.id}`} className="group block" title={`Ver extrato de ${c.name}`}>
                         <Card className={`h-full transition-all duration-200 hover:border-white/20 hover:bg-zinc-900/50 active:scale-[0.99] ${
-                          c.is_checked ? 'border-emerald-500/30 bg-emerald-950/[0.08]' : ''
+                          c.is_checked
+                            ? 'border-emerald-500/30 bg-emerald-950/[0.08]'
+                            : isLocked
+                            ? 'border-rose-500/40 bg-rose-950/[0.12]'
+                            : ''
                         }`}>
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {/* Item 28: Ícone da categoria */}
+                                <span className="text-sm shrink-0">{getCategoryIcon(c.name, c.icon)}</span>
                                 <p className="truncate font-bold text-zinc-100 group-hover:text-emerald-300 transition">
                                   {c.name}
                                 </p>
@@ -1074,14 +1238,16 @@ export default function Home() {
                                     {c.count}x
                                   </span>
                                 )}
-                                <Link
-                                  to={`/lancar?categoria=${c.id}`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
-                                  title={`Lançar gasto em ${c.name}`}
-                                >
-                                  <IconPlus className="h-3.5 w-3.5" />
-                                </Link>
+                                {!isLocked && (
+                                  <Link
+                                    to={`/lancar?categoria=${c.id}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-emerald-400 transition"
+                                    title={`Lançar gasto em ${c.name}`}
+                                  >
+                                    <IconPlus className="h-3.5 w-3.5" />
+                                  </Link>
+                                )}
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -1099,6 +1265,30 @@ export default function Home() {
                                   <IconCheck className={`h-3 w-3 ${c.is_checked ? 'text-emerald-400 stroke-[3]' : 'text-zinc-500'}`} />
                                   <span>{c.is_checked ? 'Quitada' : 'Quitar'}</span>
                                 </button>
+
+                                {/* Item 29: Cadeado Automático ao Estourar (Com Desbloqueio a Qualquer Momento) */}
+                                {isOverBudget && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      handleToggleCategoryUnlock(c.id, !c.is_unlocked);
+                                    }}
+                                    className={`shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold transition active:scale-95 ${
+                                      isLocked
+                                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30'
+                                        : 'bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25'
+                                    }`}
+                                    title={
+                                      isLocked
+                                        ? 'Categoria travada por atingir o teto! Clique para desbloquear.'
+                                        : 'Categoria desbloqueada manualmente. Clique para travar novamente.'
+                                    }
+                                  >
+                                    <span>{isLocked ? '🔒 Travada' : '🔓 Destravada'}</span>
+                                  </button>
+                                )}
                               </div>
                               {c.note && (
                                 <p className="truncate text-[11px] text-zinc-500 mt-0.5" title={c.note}>
@@ -1117,32 +1307,49 @@ export default function Home() {
 
                           <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2" />
 
-                          <div className="mt-2.5 flex items-center justify-between text-xs">
+                          <div className="mt-2.5 flex items-center justify-between gap-2 text-xs flex-wrap">
                             <span className="text-zinc-300 font-semibold tabular-nums">
                               {formatBRL(c.spent_cents)}{' '}
                               <span className="text-zinc-500 font-normal">/ {formatBRL(c.budget_cents)}</span>
                             </span>
-                            <span
-                              className={`font-semibold tabular-nums ${
-                                c.is_checked
-                                  ? 'text-emerald-400'
+                            <div className="flex items-center gap-2">
+                              {/* Item 22: Botão "Sobra vira Meta" quando quitada com economia */}
+                              {c.is_checked && left > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleRolloverSavings(c.name, left);
+                                  }}
+                                  className="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/25 transition"
+                                  title="Guardar essa economia no seu Cofre de Metas"
+                                >
+                                  🎯 Guardar Sobra
+                                </button>
+                              )}
+                              <span
+                                className={`font-semibold tabular-nums ${
+                                  c.is_checked
+                                    ? 'text-emerald-400'
+                                    : left < 0
+                                    ? 'text-red-400'
+                                    : left === 0
+                                    ? 'text-zinc-500'
+                                    : 'text-emerald-400/90'
+                                }`}
+                              >
+                                {c.is_checked
+                                  ? left > 0
+                                    ? `Quitada ✓ (Economia ${formatBRL(left)})`
+                                    : 'Quitada ✓'
                                   : left < 0
-                                  ? 'text-red-400'
+                                  ? `Excedeu ${formatBRL(-left)}`
                                   : left === 0
-                                  ? 'text-zinc-500'
-                                  : 'text-emerald-400/90'
-                              }`}
-                            >
-                              {c.is_checked
-                                ? left > 0
-                                  ? `Quitada ✓ (Economia ${formatBRL(left)})`
-                                  : 'Quitada ✓'
-                                : left < 0
-                                ? `Excedeu ${formatBRL(-left)}`
-                                : left === 0
-                                ? 'Meta atingida ✓'
-                                : `Resta ${formatBRL(left)}`}
-                            </span>
+                                  ? 'Meta atingida ✓'
+                                  : `Resta ${formatBRL(left)}`}
+                              </span>
+                            </div>
                           </div>
                         </Card>
                       </Link>
@@ -1271,7 +1478,8 @@ export default function Home() {
                           <Card className="h-full transition-all duration-200 hover:border-purple-500/40 hover:bg-zinc-900/50 active:scale-[0.99]">
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-sm shrink-0">{getCategoryIcon(c.name, c.icon)}</span>
                                   <p className="truncate font-bold text-zinc-100 group-hover:text-purple-300 transition">
                                     {c.name}
                                   </p>
@@ -1331,6 +1539,133 @@ export default function Home() {
               </>
             )}
           </section>
+
+          {/* ================= ITENS 65 E 68: TOP 5 MAIORES GASTOS & HEATMAP DE CALOR ================= */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 pt-2">
+            {/* Item 65: Top 5 Maiores Gastos do Mês */}
+            <Card className="lg:col-span-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>🏆</span> Top 5 Maiores Gastos do Mês
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Os maiores desembolsos individuais registrados no período
+                  </p>
+                </div>
+                <Link to="/extrato" className="text-xs font-bold text-emerald-400 hover:underline">
+                  Ver todos →
+                </Link>
+              </div>
+
+              {!data.top_expenses || data.top_expenses.length === 0 ? (
+                <p className="py-6 text-center text-xs text-zinc-500">Nenhum gasto lançado neste mês.</p>
+              ) : (
+                <div className="space-y-2">
+                  {data.top_expenses.map((exp, idx) => (
+                    <Link
+                      key={exp.id}
+                      to={`/extrato?busca=${encodeURIComponent(exp.title || exp.category_name)}`}
+                      className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.06] bg-zinc-900/50 p-2.5 hover:border-white/15 transition"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-[11px] font-black text-emerald-300">
+                          #{idx + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-white truncate">
+                            {exp.title || exp.category_name}
+                          </p>
+                          <p className="text-[10px] text-zinc-500 truncate">
+                            {getCategoryIcon(exp.category_name)} {exp.category_name} • {exp.spent_on.split('-')[2]}/{exp.spent_on.split('-')[1]}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-extrabold text-rose-300 tabular-nums shrink-0">
+                        {formatBRL(exp.amount_cents)}
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            {/* Item 68: Heatmap (Mapa de Calor) de Gastos Diários */}
+            <Card className="lg:col-span-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>🔥</span> Mapa de Calor de Gastos (Heatmap)
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Intensidade diária de gastos ao longo dos dias do mês
+                  </p>
+                </div>
+                <Link to="/calendario" className="text-xs font-bold text-emerald-400 hover:underline">
+                  Calendário →
+                </Link>
+              </div>
+
+              {(() => {
+                const [y, m] = month.split('-').map(Number);
+                const daysCount = new Date(y, m, 0).getDate();
+                const map = new Map<string, { total: number; count: number }>();
+                (data.daily_heatmap ?? []).forEach((h) =>
+                  map.set(h.date, { total: h.total_cents, count: h.count }),
+                );
+                const maxDayTotal = Math.max(
+                  ...(data.daily_heatmap ?? []).map((h) => h.total_cents),
+                  1,
+                );
+
+                return (
+                  <div className="space-y-3 pt-1">
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {Array.from({ length: daysCount }).map((_, idx) => {
+                        const d = idx + 1;
+                        const dateStr = `${month}-${String(d).padStart(2, '0')}`;
+                        const info = map.get(dateStr);
+                        const total = info?.total ?? 0;
+                        const ratio = total > 0 ? total / maxDayTotal : 0;
+
+                        const cellColor =
+                          total === 0
+                            ? 'bg-zinc-900/70 border-white/[0.04] text-zinc-600'
+                            : ratio > 0.75
+                            ? 'bg-rose-500/80 border-rose-400 text-white font-extrabold shadow-sm shadow-rose-500/30'
+                            : ratio > 0.4
+                            ? 'bg-amber-500/60 border-amber-400/60 text-white font-bold'
+                            : 'bg-emerald-500/35 border-emerald-500/40 text-emerald-200 font-semibold';
+
+                        return (
+                          <Link
+                            key={dateStr}
+                            to="/calendario"
+                            title={`Dia ${d}: ${total > 0 ? `${formatBRL(total)} (${info?.count} gastos)` : 'Zero gastos!'}`}
+                            className={`flex flex-col items-center justify-center rounded-lg border py-1.5 text-[10px] tabular-nums transition hover:scale-105 ${cellColor}`}
+                          >
+                            <span>{d}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10px] text-zinc-500 pt-1 border-t border-white/[0.05]">
+                      <span>Dias sem gastos ficam neutros</span>
+                      <div className="flex items-center gap-1.5">
+                        <span>Menor</span>
+                        <span className="h-2.5 w-2.5 rounded bg-zinc-900 border border-white/10" />
+                        <span className="h-2.5 w-2.5 rounded bg-emerald-500/40" />
+                        <span className="h-2.5 w-2.5 rounded bg-amber-500/60" />
+                        <span className="h-2.5 w-2.5 rounded bg-rose-500/80" />
+                        <span>Maior</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </Card>
+          </div>
         </>
       )}
 

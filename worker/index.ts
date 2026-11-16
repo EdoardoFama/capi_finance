@@ -625,15 +625,40 @@ app.use('*', async (c, next) => {
 });
 
 app.get('/auth/me', async (c) => {
-  const user = await c.env.DB.prepare('SELECT id, username, email, is_admin FROM users WHERE id = ?')
-    .bind(c.get('userId'))
-    .first<{ id: number; username: string; email: string; is_admin: number }>();
+  const uid = c.get('userId');
+  const user = await c.env.DB.prepare(
+    "SELECT id, username, email, is_admin, COALESCE(pin_code, '1201') AS pin_code FROM users WHERE id = ?",
+  )
+    .bind(uid)
+    .first<{ id: number; username: string; email: string; is_admin: number; pin_code: string }>();
+
+  const failedLogins = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count, MAX(created_at) AS last_at, MAX(ip_address) AS last_ip
+     FROM security_audit_logs
+     WHERE user_id = ? AND event_type = 'LOGIN_FAILED' AND created_at > datetime('now', '-24 hours')`,
+  )
+    .bind(uid)
+    .first<{ count: number; last_at: string | null; last_ip: string | null }>();
+
   return c.json({
     id: user?.id,
     username: user?.username,
     email: user?.email,
     is_admin: user?.is_admin === 1,
+    pin_code: user?.pin_code || '1201',
+    recent_failed_logins: failedLogins?.count ?? 0,
+    last_failed_login_at: failedLogins?.last_at ?? null,
+    last_failed_login_ip: failedLogins?.last_ip ?? null,
   });
+});
+
+app.post('/user/pin', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const pin = str(data.pin_code, 'PIN', { max: 8 })!;
+  if (!/^\d{4,8}$/.test(pin)) bad('O PIN deve conter de 4 a 8 dígitos numéricos');
+  await c.env.DB.prepare('UPDATE users SET pin_code = ? WHERE id = ?').bind(pin, uid).run();
+  return c.json({ ok: true, pin_code: pin });
 });
 
 app.post('/auth/logout', async (c) => {
@@ -829,7 +854,7 @@ app.delete('/incomes/:id', async (c) => {
 // ---------- categorias / gastos previstos ----------
 app.get('/categories', async (c) => {
   const { results } = await c.env.DB.prepare(
-    'SELECT id, name, budget_cents, note, sort_order, COALESCE(is_fixed, 1) AS is_fixed FROM categories WHERE user_id = ? ORDER BY is_fixed DESC, sort_order, id',
+    "SELECT id, name, budget_cents, note, sort_order, COALESCE(is_fixed, 1) AS is_fixed, COALESCE(icon, '') AS icon FROM categories WHERE user_id = ? ORDER BY is_fixed DESC, sort_order, id",
   )
     .bind(c.get('userId'))
     .all();
@@ -841,18 +866,38 @@ app.post('/categories', async (c) => {
   const name = str(data.name, 'nome')!;
   const budget = cents(data.budget_cents, 'valor')!;
   const note = str(data.note ?? '', 'observação', { required: false, max: 200 }) ?? '';
+  const icon = str(data.icon ?? '', 'ícone', { required: false, max: 16 }) ?? '';
   const isFixed = data.is_fixed === 0 || data.is_fixed === false ? 0 : 1;
   const uid = c.get('userId');
   const row = await guardUnique(() =>
     c.env.DB.prepare(
-      `INSERT INTO categories (user_id, name, budget_cents, note, sort_order, is_fixed)
-       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories WHERE user_id = ?), ?)
-       RETURNING id, name, budget_cents, note, sort_order, is_fixed`,
+      `INSERT INTO categories (user_id, name, budget_cents, note, sort_order, is_fixed, icon)
+       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories WHERE user_id = ?), ?, ?)
+       RETURNING id, name, budget_cents, note, sort_order, is_fixed, icon`,
     )
-      .bind(uid, name, budget, note, uid, isFixed)
+      .bind(uid, name, budget, note, uid, isFixed, icon)
       .first(),
   );
   return c.json(row, 201);
+});
+
+app.post('/categories/reorder', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const orderedIds = Array.isArray(data.ordered_ids)
+    ? data.ordered_ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  if (orderedIds.length === 0) bad('Lista de categorias inválida');
+
+  const stmts = orderedIds.map((catId, idx) =>
+    c.env.DB.prepare('UPDATE categories SET sort_order = ? WHERE id = ? AND user_id = ?').bind(
+      idx + 1,
+      catId,
+      uid,
+    ),
+  );
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true });
 });
 
 app.put('/categories/:id', async (c) => {
@@ -861,14 +906,16 @@ app.put('/categories/:id', async (c) => {
   const name = str(data.name, 'nome', { required: false });
   const budget = cents(data.budget_cents, 'valor', { required: false });
   const note = str(data.note, 'observação', { required: false, max: 200 });
+  const icon = str(data.icon, 'ícone', { required: false, max: 16 });
   const isFixed = data.is_fixed !== undefined ? (data.is_fixed ? 1 : 0) : null;
   const row = await guardUnique(() =>
     c.env.DB.prepare(
       `UPDATE categories SET name = COALESCE(?, name), budget_cents = COALESCE(?, budget_cents),
-       note = COALESCE(?, note), is_fixed = COALESCE(?, is_fixed) WHERE id = ? AND user_id = ?
-       RETURNING id, name, budget_cents, note, sort_order, is_fixed`,
+       note = COALESCE(?, note), is_fixed = COALESCE(?, is_fixed), icon = COALESCE(?, icon)
+       WHERE id = ? AND user_id = ?
+       RETURNING id, name, budget_cents, note, sort_order, is_fixed, icon`,
     )
-      .bind(name ?? null, budget ?? null, note ?? null, isFixed, id, c.get('userId'))
+      .bind(name ?? null, budget ?? null, note ?? null, isFixed, icon ?? null, id, c.get('userId'))
       .first(),
   );
   if (!row) bad('Categoria não encontrada', 404);
@@ -894,19 +941,47 @@ app.post('/categories/:id/check', async (c) => {
   const data = await body(c);
   const month = str(data.month, 'mês')!;
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad('Mês inválido (use YYYY-MM)');
-  const isChecked = data.is_checked === true || data.is_checked === 1 ? 1 : 0;
 
   await assertCategory(c, catId, uid);
 
-  await c.env.DB.prepare(
-    `INSERT INTO category_month_checks (user_id, category_id, month, is_checked, updated_at)
-     VALUES (?, ?, ?, ?, datetime('now'))
-     ON CONFLICT (user_id, category_id, month) DO UPDATE SET is_checked = excluded.is_checked, updated_at = datetime('now')`,
+  const existing = await c.env.DB.prepare(
+    'SELECT is_checked, COALESCE(is_unlocked, 0) AS is_unlocked FROM category_month_checks WHERE user_id = ? AND category_id = ? AND month = ?',
   )
-    .bind(uid, catId, month, isChecked)
+    .bind(uid, catId, month)
+    .first<{ is_checked: number; is_unlocked: number }>();
+
+  const nextChecked =
+    data.is_checked !== undefined
+      ? data.is_checked === true || data.is_checked === 1
+        ? 1
+        : 0
+      : existing?.is_checked ?? 0;
+
+  const nextUnlocked =
+    data.is_unlocked !== undefined
+      ? data.is_unlocked === true || data.is_unlocked === 1
+        ? 1
+        : 0
+      : existing?.is_unlocked ?? 0;
+
+  await c.env.DB.prepare(
+    `INSERT INTO category_month_checks (user_id, category_id, month, is_checked, is_unlocked, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT (user_id, category_id, month) DO UPDATE SET
+       is_checked = excluded.is_checked,
+       is_unlocked = excluded.is_unlocked,
+       updated_at = datetime('now')`,
+  )
+    .bind(uid, catId, month, nextChecked, nextUnlocked)
     .run();
 
-  return c.json({ ok: true, category_id: catId, month, is_checked: isChecked === 1 });
+  return c.json({
+    ok: true,
+    category_id: catId,
+    month,
+    is_checked: nextChecked === 1,
+    is_unlocked: nextUnlocked === 1,
+  });
 });
 
 // ---------- lançamentos (expenses) e contas ----------
@@ -915,7 +990,7 @@ type AccountId = string;
 const EXPENSE_SELECT = `SELECT e.id, e.category_id, c.name AS category_name, e.amount_cents,
   e.title, e.description, e.spent_on, e.payment_method, COALESCE(e.account_id, 'nubank') AS account_id,
   e.installment_current, e.installment_total,
-  e.installment_group_id, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id AND c.user_id = e.user_id`;
+  e.installment_group_id, COALESCE(e.tags, '') AS tags, e.created_at FROM expenses e JOIN categories c ON c.id = e.category_id AND c.user_id = e.user_id`;
 
 function addMonthsToDate(isoDate: string, monthsToAdd: number): string {
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -937,6 +1012,24 @@ app.get('/expenses', async (c) => {
      ORDER BY e.spent_on DESC, e.id DESC`,
   )
     .bind(c.get('userId'), start, end)
+    .all();
+  return c.json(results);
+});
+
+app.get('/expenses/range', async (c) => {
+  const uid = c.get('userId');
+  const startMonth = c.req.query('start') || '2020-01';
+  const endMonth = c.req.query('end') || '2099-12';
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(startMonth) || !/^\d{4}-(0[1-9]|1[0-2])$/.test(endMonth)) {
+    bad('Período inválido (use YYYY-MM)');
+  }
+  const [start] = monthRange(startMonth);
+  const [, end] = monthRange(endMonth);
+  const { results } = await c.env.DB.prepare(
+    `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.spent_on >= ? AND e.spent_on < ?
+     ORDER BY e.spent_on DESC, e.id DESC`,
+  )
+    .bind(uid, start, end)
     .all();
   return c.json(results);
 });
@@ -971,6 +1064,7 @@ app.post('/expenses', async (c) => {
   const amount = cents(data.amount_cents, 'valor', { min: 1 })!;
   const title = str(data.title, 'título', { required: true, max: 120 })!;
   const description = str(data.description ?? '', 'descrição', { required: false, max: 200 }) ?? '';
+  const tags = str(data.tags ?? '', 'tags', { required: false, max: 120 }) ?? '';
   const spentOn = str(data.spent_on, 'data')!;
   if (!isDate(spentOn)) bad('Data inválida');
   await assertCategory(c, categoryId, uid);
@@ -988,10 +1082,10 @@ app.post('/expenses', async (c) => {
 
   if (installments === 1) {
     const { id } = (await c.env.DB.prepare(
-      `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1) RETURNING id`,
+      `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?) RETURNING id`,
     )
-      .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod, accountId)
+      .bind(uid, categoryId, amount, title, description, spentOn, paymentMethod, accountId, tags)
       .first<{ id: number }>())!;
     const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ? AND e.user_id = ?`).bind(id, uid).first();
     return c.json(row, 201);
@@ -1008,9 +1102,9 @@ app.post('/expenses', async (c) => {
     const installmentDate = addMonthsToDate(spentOn, i - 1);
     statements.push(
       c.env.DB.prepare(
-        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total, installment_group_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'credit', ?, ?, ?, ?)`,
-      ).bind(uid, categoryId, installmentAmount, title, description, installmentDate, accountId, i, installments, groupId),
+        `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total, installment_group_id, tags)
+         VALUES (?, ?, ?, ?, ?, ?, 'credit', ?, ?, ?, ?, ?)`,
+      ).bind(uid, categoryId, installmentAmount, title, description, installmentDate, accountId, i, installments, groupId, tags),
     );
   }
 
@@ -1024,6 +1118,42 @@ app.post('/expenses', async (c) => {
   return c.json(firstRow, 201);
 });
 
+app.post('/expenses/batch-category', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const ids = Array.isArray(data.ids)
+    ? data.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  const categoryId = cents(data.category_id, 'categoria', { min: 1 })!;
+  if (ids.length === 0 || ids.length > 200) bad('Selecione entre 1 e 200 lançamentos');
+  await assertCategory(c, categoryId, uid);
+
+  const stmts = ids.map((expId) =>
+    c.env.DB.prepare('UPDATE expenses SET category_id = ? WHERE id = ? AND user_id = ?').bind(
+      categoryId,
+      expId,
+      uid,
+    ),
+  );
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true, updated_count: ids.length });
+});
+
+app.post('/expenses/batch-delete', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const ids = Array.isArray(data.ids)
+    ? data.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  if (ids.length === 0 || ids.length > 200) bad('Selecione entre 1 e 200 lançamentos');
+
+  const stmts = ids.map((expId) =>
+    c.env.DB.prepare('DELETE FROM expenses WHERE id = ? AND user_id = ?').bind(expId, uid),
+  );
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true, deleted_count: ids.length });
+});
+
 app.put('/expenses/:id', async (c) => {
   const id = idParam(c.req.param('id'));
   const data = await body(c);
@@ -1033,6 +1163,7 @@ app.put('/expenses/:id', async (c) => {
   const amount = cents(data.amount_cents, 'valor', { required: false, min: 1 });
   const title = str(data.title, 'título', { required: false, max: 120 });
   const description = str(data.description, 'descrição', { required: false, max: 200 });
+  const tags = str(data.tags, 'tags', { required: false, max: 120 });
   const spentOn = str(data.spent_on, 'data', { required: false });
   if (spentOn !== undefined && !isDate(spentOn)) bad('Data inválida');
   if (categoryId !== undefined) await assertCategory(c, categoryId, uid);
@@ -1055,20 +1186,22 @@ app.put('/expenses/:id', async (c) => {
       `UPDATE expenses SET category_id = COALESCE(?, category_id),
        title = COALESCE(?, title),
        account_id = COALESCE(?, account_id),
-       payment_method = COALESCE(?, payment_method)
+       payment_method = COALESCE(?, payment_method),
+       tags = COALESCE(?, tags)
        WHERE installment_group_id = ? AND user_id = ?`,
     )
-      .bind(categoryId ?? null, title ?? null, rawAccount, rawMethod, current.installment_group_id, uid)
+      .bind(categoryId ?? null, title ?? null, rawAccount, rawMethod, tags ?? null, current.installment_group_id, uid)
       .run();
   }
 
   const updated = await c.env.DB.prepare(
     `UPDATE expenses SET category_id = COALESCE(?, category_id), amount_cents = COALESCE(?, amount_cents),
      title = COALESCE(?, title), description = COALESCE(?, description), spent_on = COALESCE(?, spent_on),
-     account_id = COALESCE(?, account_id), payment_method = COALESCE(?, payment_method)
+     account_id = COALESCE(?, account_id), payment_method = COALESCE(?, payment_method),
+     tags = COALESCE(?, tags)
      WHERE id = ? AND user_id = ? RETURNING id`,
   )
-    .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, rawAccount, rawMethod, id, uid)
+    .bind(categoryId ?? null, amount ?? null, title ?? null, description ?? null, spentOn ?? null, rawAccount, rawMethod, tags ?? null, id, uid)
     .first();
   if (!updated) bad('Lançamento não encontrado', 404);
   const row = await c.env.DB.prepare(`${EXPENSE_SELECT} WHERE e.id = ? AND e.user_id = ?`).bind(id, uid).first();
@@ -1328,6 +1461,84 @@ app.delete('/reminders/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------- cofres e metas de reserva (savings_goals) ----------
+app.get('/savings-goals', async (c) => {
+  const uid = c.get('userId');
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, icon, target_cents, current_cents, color, created_at FROM savings_goals WHERE user_id = ? ORDER BY id ASC',
+  )
+    .bind(uid)
+    .all();
+  return c.json(results);
+});
+
+app.post('/savings-goals', async (c) => {
+  const uid = c.get('userId');
+  const data = await body(c);
+  const name = str(data.name, 'nome da meta', { max: 80 })!;
+  const icon = str(data.icon ?? '🎯', 'ícone', { required: false, max: 16 }) || '🎯';
+  const targetCents = cents(data.target_cents ?? 0, 'meta', { min: 0 })!;
+  const currentCents = cents(data.current_cents ?? 0, 'valor atual', { min: 0 })!;
+  const color = validHexColor(data.color, '#10b981');
+
+  const row = await c.env.DB.prepare(
+    `INSERT INTO savings_goals (user_id, name, icon, target_cents, current_cents, color)
+     VALUES (?, ?, ?, ?, ?, ?)
+     RETURNING id, name, icon, target_cents, current_cents, color, created_at`,
+  )
+    .bind(uid, name, icon, targetCents, currentCents, color)
+    .first();
+
+  return c.json(row, 201);
+});
+
+app.put('/savings-goals/:id', async (c) => {
+  const id = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+  const data = await body(c);
+
+  const existing = await c.env.DB.prepare(
+    'SELECT id, current_cents FROM savings_goals WHERE id = ? AND user_id = ?',
+  )
+    .bind(id, uid)
+    .first<{ id: number; current_cents: number }>();
+  if (!existing) bad('Meta/Cofre não encontrado', 404);
+
+  const name = str(data.name, 'nome', { required: false, max: 80 });
+  const icon = str(data.icon, 'ícone', { required: false, max: 16 });
+  const targetCents = cents(data.target_cents, 'meta', { required: false, min: 0 });
+  let currentCents = cents(data.current_cents, 'valor atual', { required: false, min: 0 });
+  if (typeof data.add_cents === 'number' && Number.isInteger(data.add_cents)) {
+    currentCents = Math.max(0, existing.current_cents + data.add_cents);
+  }
+  const color = data.color !== undefined ? validHexColor(data.color) : null;
+
+  const updated = await c.env.DB.prepare(
+    `UPDATE savings_goals SET
+       name = COALESCE(?, name),
+       icon = COALESCE(?, icon),
+       target_cents = COALESCE(?, target_cents),
+       current_cents = COALESCE(?, current_cents),
+       color = COALESCE(?, color),
+       updated_at = datetime('now')
+     WHERE id = ? AND user_id = ?
+     RETURNING id, name, icon, target_cents, current_cents, color, created_at`,
+  )
+    .bind(name ?? null, icon ?? null, targetCents ?? null, currentCents ?? null, color, id, uid)
+    .first();
+
+  return c.json(updated);
+});
+
+app.delete('/savings-goals/:id', async (c) => {
+  const id = idParam(c.req.param('id'));
+  const uid = c.get('userId');
+  await c.env.DB.prepare('DELETE FROM savings_goals WHERE id = ? AND user_id = ?')
+    .bind(id, uid)
+    .run();
+  return c.json({ ok: true });
+});
+
 // ---------- dashboard ----------
 app.get('/dashboard', async (c) => {
   const month = c.req.query('month') || new Date().toISOString().slice(0, 7);
@@ -1337,6 +1548,7 @@ app.get('/dashboard', async (c) => {
   const [cats, inc] = await c.env.DB.batch<Record<string, number | string>>([
     c.env.DB.prepare(
       `SELECT c.id, c.name, c.budget_cents, c.note, c.sort_order, COALESCE(c.is_fixed, 1) AS is_fixed,
+              COALESCE(c.icon, '') AS icon,
               COALESCE(SUM(e.amount_cents), 0) AS spent_cents, COUNT(e.id) AS count
        FROM categories c
        LEFT JOIN expenses e ON e.category_id = c.id AND e.user_id = c.user_id AND e.spent_on >= ? AND e.spent_on < ?
@@ -1346,18 +1558,30 @@ app.get('/dashboard', async (c) => {
     c.env.DB.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS total FROM incomes WHERE user_id = ?').bind(uid),
   ]);
 
-  // Busca marcações de categorias quitadas no mês
+  // Busca marcações de categorias quitadas e desbloqueadas no mês
   const { results: checkRows } = await c.env.DB.prepare(
-    'SELECT category_id FROM category_month_checks WHERE user_id = ? AND month = ? AND is_checked = 1',
+    'SELECT category_id, is_checked, COALESCE(is_unlocked, 0) AS is_unlocked FROM category_month_checks WHERE user_id = ? AND month = ?',
   )
     .bind(uid, month)
-    .all<{ category_id: number }>();
-  const checkedSet = new Set(checkRows.map((r) => r.category_id));
+    .all<{ category_id: number; is_checked: number; is_unlocked: number }>();
+  const checkedSet = new Set(checkRows.filter((r) => r.is_checked === 1).map((r) => r.category_id));
+  const unlockedSet = new Set(checkRows.filter((r) => r.is_unlocked === 1).map((r) => r.category_id));
 
-  const rawCats = cats.results as unknown as { id: number; name: string; budget_cents: number; note: string; sort_order: number; is_fixed: number; spent_cents: number; count: number }[];
+  const rawCats = cats.results as unknown as {
+    id: number;
+    name: string;
+    budget_cents: number;
+    note: string;
+    sort_order: number;
+    is_fixed: number;
+    icon: string;
+    spent_cents: number;
+    count: number;
+  }[];
   const categories = rawCats.map((cat) => ({
     ...cat,
     is_checked: checkedSet.has(cat.id),
+    is_unlocked: unlockedSet.has(cat.id),
   }));
 
   // 1. Balances definidos pelo usuário (prioriza o mês atual, fallback para o mais recente)
@@ -1473,6 +1697,22 @@ app.get('/dashboard', async (c) => {
     predicted_surplus_cents: predictedSurplusCents,
   };
 
+  const [topExpRows, heatmapRows, goalsRows] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.spent_on >= ? AND e.spent_on < ?
+       ORDER BY e.amount_cents DESC, e.id DESC LIMIT 5`,
+    ).bind(uid, start, end),
+    c.env.DB.prepare(
+      `SELECT spent_on AS date, COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS count
+       FROM expenses
+       WHERE user_id = ? AND spent_on >= ? AND spent_on < ?
+       GROUP BY spent_on ORDER BY spent_on ASC`,
+    ).bind(uid, start, end),
+    c.env.DB.prepare(
+      'SELECT id, name, icon, target_cents, current_cents, color, created_at FROM savings_goals WHERE user_id = ? ORDER BY id ASC',
+    ).bind(uid),
+  ]);
+
   return c.json({
     month,
     total_income_cents: totalIncomeCents,
@@ -1487,6 +1727,9 @@ app.get('/dashboard', async (c) => {
     categories,
     accounts,
     projection,
+    top_expenses: topExpRows.results,
+    daily_heatmap: heatmapRows.results,
+    savings_goals: goalsRows.results,
   });
 });
 
@@ -2042,6 +2285,62 @@ app.get('/credit-card/invoice', async (c) => {
   const remainingCents = Math.max(0, totalCents - paidAmountCents);
   const isPaid = (totalCents > 0 && paidAmountCents >= totalCents) || Boolean(invoice?.is_paid && remainingCents === 0);
 
+  // Item 16: Divisão da fatura por categoria
+  const byCategoryMap = new Map<string, { category_id: number; category_name: string; total_cents: number; count: number }>();
+  for (const exp of expenses as any[]) {
+    const key = String(exp.category_id);
+    const prev = byCategoryMap.get(key) || {
+      category_id: Number(exp.category_id),
+      category_name: String(exp.category_name || 'Outros'),
+      total_cents: 0,
+      count: 0,
+    };
+    prev.total_cents += Number(exp.amount_cents || 0);
+    prev.count += 1;
+    byCategoryMap.set(key, prev);
+  }
+  const byCategory = Array.from(byCategoryMap.values()).sort((a, b) => b.total_cents - a.total_cents);
+
+  // Item 15: Histórico gráfico de faturas (últimos 6 meses)
+  const [currY, currM] = month.split('-').map(Number);
+  const histMonths: string[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(currY, currM - 1 - i, 1);
+    histMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const histFirstStart = `${histMonths[0]}-01`;
+  const [, histLastEnd] = monthRange(histMonths[histMonths.length - 1]);
+
+  const { results: histRows } = await c.env.DB.prepare(
+    `SELECT substr(spent_on, 1, 7) AS m, COALESCE(SUM(amount_cents), 0) AS total_cents
+     FROM expenses
+     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?
+     GROUP BY m`,
+  )
+    .bind(uid, histFirstStart, histLastEnd)
+    .all<{ m: string; total_cents: number }>();
+  const histMap = new Map(histRows.map((r) => [r.m, r.total_cents]));
+  const history = histMonths.map((m) => ({
+    month: m,
+    total_cents: histMap.get(m) ?? 0,
+  }));
+
+  // Item 12: Simulador de Fechamento de Fatura (Fecha dia 21 e vence dia 27)
+  const nextMonthDate = new Date(currY, currM, 1);
+  const nextMonthStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}`;
+  const [nextStart, nextEnd] = monthRange(nextMonthStr);
+  const nextProjRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
+     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+  )
+    .bind(uid, nextStart, nextEnd)
+    .first<{ total: number }>();
+
+  const before21Cents = (expenses as any[])
+    .filter((e) => Number(String(e.spent_on).slice(8, 10)) < 21)
+    .reduce((s, e) => s + Number(e.amount_cents || 0), 0);
+  const from21Cents = totalCents - before21Cents;
+
   return c.json({
     month,
     total_cents: totalCents,
@@ -2053,6 +2352,16 @@ app.get('/credit-card/invoice', async (c) => {
     paid_at: invoice?.paid_at ?? null,
     nubank_balance_cents: nubankBalanceCents,
     expenses,
+    by_category: byCategory,
+    history,
+    cycle: {
+      closing_day: 21,
+      due_day: 27,
+      before_closing_cents: before21Cents,
+      after_closing_cents: from21Cents,
+      next_month: nextMonthStr,
+      next_month_scheduled_cents: nextProjRow?.total ?? 0,
+    },
   });
 });
 
@@ -2230,6 +2539,81 @@ app.post('/user/webhook-token/regenerate', async (c) => {
   return c.json({ webhook_token: token, webhook_url: webhookUrl });
 });
 
+// Lista os últimos logs de webhook do usuário (Item 05)
+app.get('/user/webhook-logs', async (c) => {
+  const uid = c.get('userId');
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, title, body, parsed_type, status, result_summary, expense_id, created_at
+     FROM webhook_logs
+     WHERE user_id = ?
+     ORDER BY id DESC LIMIT 40`,
+  )
+    .bind(uid)
+    .all();
+  return c.json(results);
+});
+
+// Reprocessa um log de webhook salvo (Item 05)
+app.post('/user/webhook-logs/:id/reprocess', async (c) => {
+  const uid = c.get('userId');
+  const logId = idParam(c.req.param('id'));
+  const log = await c.env.DB.prepare(
+    'SELECT id, title, body FROM webhook_logs WHERE id = ? AND user_id = ?',
+  )
+    .bind(logId, uid)
+    .first<{ id: number; title: string; body: string }>();
+
+  if (!log) bad('Log de webhook não encontrado', 404);
+
+  const parsed = parseNubankNotification(log.title, log.body);
+  if (parsed.title) parsed.title = cleanEstablishmentName(parsed.title);
+
+  if (parsed.type === 'ignore' || parsed.amount_cents <= 0) {
+    bad(`Não foi possível extrair valor válido deste log (${parsed.description || 'ignorado'})`);
+  }
+
+  const today = getTodayBrasilia();
+
+  // Auto-categorização inteligente por histórico do usuário (Item 03)
+  const learned = await c.env.DB.prepare(
+    'SELECT category_id FROM expenses WHERE user_id = ? AND lower(title) = lower(?) ORDER BY id DESC LIMIT 1',
+  )
+    .bind(uid, parsed.title)
+    .first<{ category_id: number }>();
+
+  const categories = await c.env.DB.prepare('SELECT id, name FROM categories WHERE user_id = ?')
+    .bind(uid)
+    .all<{ id: number; name: string }>();
+
+  let matchedCat = learned
+    ? categories.results.find((cat) => cat.id === learned.category_id)
+    : undefined;
+  if (!matchedCat) {
+    const targetCategoryHint = (parsed.category_hint || 'OUTROS').toUpperCase();
+    matchedCat =
+      categories.results.find((cat) => cat.name.toUpperCase() === targetCategoryHint) ||
+      categories.results.find((cat) => cat.name.toUpperCase() === 'OUTROS') ||
+      categories.results[0];
+  }
+  const categoryId = matchedCat?.id ?? 1;
+
+  const { id: expId } = (await c.env.DB.prepare(
+    `INSERT INTO expenses (user_id, category_id, amount_cents, title, description, spent_on, payment_method, account_id, installment_current, installment_total)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'nubank', 1, 1) RETURNING id`,
+  )
+    .bind(uid, categoryId, parsed.amount_cents, parsed.title, parsed.description, today, parsed.payment_method)
+    .first<{ id: number }>())!;
+
+  const summary = `Reprocessado: ${parsed.title} — R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')} (${matchedCat?.name || 'Outros'})`;
+  await c.env.DB.prepare(
+    `UPDATE webhook_logs SET status = 'processed', result_summary = ?, expense_id = ? WHERE id = ?`,
+  )
+    .bind(summary, expId, log.id)
+    .run();
+
+  return c.json({ ok: true, expense_id: expId, summary });
+});
+
 // Endpoint receptor público autenticado por Token de Webhook
 app.post('/integrations/nubank', async (c) => {
   const ip = getClientIp(c);
@@ -2281,6 +2665,33 @@ app.post('/integrations/nubank', async (c) => {
   // Obter texto e título da notificação
   const title = String(rawData.title || rawData.notification_title || rawData.header || '').trim();
   const text = String(rawData.text || rawData.notification_text || rawData.message || rawData.content || '').trim();
+  const today = getTodayBrasilia();
+
+  // Item 07: Chave de Idempotência (evita duplicatas se o MacroDroid reenviar por oscilação de sinal)
+  const dedupHash = await sha256(`${user.id}:${title}:${text}:${today}`);
+  const recentDupLog = await c.env.DB.prepare(
+    `SELECT id, expense_id, result_summary FROM webhook_logs
+     WHERE user_id = ? AND dedup_hash = ? AND status = 'processed' AND created_at > datetime('now', '-3 minutes')
+     LIMIT 1`,
+  )
+    .bind(user.id, dedupHash)
+    .first<{ id: number; expense_id: number | null; result_summary: string }>();
+
+  if (recentDupLog) {
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary, expense_id)
+       VALUES (?, ?, ?, ?, 'duplicate', 'duplicate', 'Ignorado por chave de idempotência (envio duplicado)', ?)`,
+    )
+      .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, recentDupLog.expense_id)
+      .run();
+
+    return c.json({
+      ok: true,
+      action: 'ignored_duplicate',
+      message: 'Notificação idêntica já processada recentemente (Idempotência)',
+      expense_id: recentDupLog.expense_id,
+    });
+  }
 
   // Parsing do evento Nubank
   const parsed = parseNubankNotification(title, text);
@@ -2306,15 +2717,75 @@ app.post('/integrations/nubank', async (c) => {
   }
 
   if (parsed.type === 'ignore' || parsed.amount_cents <= 0) {
+    const reason = parsed.description || 'Notificação sem valor financeiro ou ignorada por regra';
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary)
+       VALUES (?, ?, ?, ?, 'ignore', 'ignored', ?)`,
+    )
+      .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, reason.slice(0, 200))
+      .run();
+
     return c.json({
       ok: true,
       action: 'ignored',
-      reason: parsed.description || 'Notificação sem valor financeiro ou ignorada por regra',
+      reason,
       raw_text: parsed.raw_text,
     });
   }
 
-  const today = getTodayBrasilia();
+  // Item 02: Estorno / Reembolso Automático
+  if (parsed.type === 'refund') {
+    const matchingExpense = await c.env.DB.prepare(
+      `SELECT id, title, amount_cents FROM expenses
+       WHERE user_id = ? AND amount_cents = ?
+       ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(user.id, parsed.amount_cents)
+      .first<{ id: number; title: string; amount_cents: number }>();
+
+    if (matchingExpense) {
+      await c.env.DB.prepare('DELETE FROM expenses WHERE id = ? AND user_id = ?')
+        .bind(matchingExpense.id, user.id)
+        .run();
+
+      const summary = `Estorno automático: lançamento "${matchingExpense.title}" (R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}) revertido!`;
+      await c.env.DB.prepare(
+        `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary, expense_id)
+         VALUES (?, ?, ?, ?, 'refund', 'processed', ?, ?)`,
+      )
+        .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, summary, matchingExpense.id)
+        .run();
+
+      return c.json({
+        ok: true,
+        action: 'refund_reverted',
+        message: summary,
+        reverted_expense_id: matchingExpense.id,
+      });
+    } else {
+      const { id: inflowId } = (await c.env.DB.prepare(
+        `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+         VALUES (?, 'nubank', ?, ?, ?) RETURNING id`,
+      )
+        .bind(user.id, parsed.amount_cents, `Estorno/Reembolso: ${parsed.title}`, today)
+        .first<{ id: number }>())!;
+
+      const summary = `Estorno creditado como entrada: R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`;
+      await c.env.DB.prepare(
+        `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary)
+         VALUES (?, ?, ?, ?, 'refund', 'processed', ?)`,
+      )
+        .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, summary)
+        .run();
+
+      return c.json({
+        ok: true,
+        action: 'refund_credited',
+        inflow_id: inflowId,
+        message: summary,
+      });
+    }
+  }
 
   // Anti-duplicação nos últimos 120 segundos
   if (parsed.type === 'expense') {
@@ -2334,19 +2805,33 @@ app.post('/integrations/nubank', async (c) => {
       });
     }
 
-    // Resolver categoria do usuário
+    // Item 03: Auto-categorização inteligente baseada no histórico do próprio usuário
+    const learned = await c.env.DB.prepare(
+      'SELECT category_id FROM expenses WHERE user_id = ? AND lower(title) = lower(?) ORDER BY id DESC LIMIT 1',
+    )
+      .bind(user.id, parsed.title)
+      .first<{ category_id: number }>();
+
     const categories = await c.env.DB.prepare(
       'SELECT id, name FROM categories WHERE user_id = ?'
     )
       .bind(user.id)
       .all<{ id: number; name: string }>();
 
-    const targetCategoryHint = (parsed.category_hint || 'OUTROS').toUpperCase();
-    let matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === targetCategoryHint);
+    let matchedCat = learned
+      ? categories.results.find((cat) => cat.id === learned.category_id)
+      : undefined;
+
     if (!matchedCat) {
-      matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === 'OUTROS') || categories.results[0];
+      const targetCategoryHint = (parsed.category_hint || 'OUTROS').toUpperCase();
+      matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === targetCategoryHint);
+      if (!matchedCat) {
+        matchedCat = categories.results.find((cat) => cat.name.toUpperCase() === 'OUTROS') || categories.results[0];
+      }
     }
     const categoryId = matchedCat?.id ?? 1;
+    const formattedAmount = `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`;
+    const notificationMsg = `Compra de ${formattedAmount} em ${parsed.title} lançada em ${matchedCat?.name || 'Outros'}!`;
 
     // Inserção da despesa à vista
     if (parsed.installments <= 1) {
@@ -2365,17 +2850,26 @@ app.post('/integrations/nubank', async (c) => {
         )
         .first<{ id: number }>())!;
 
-      await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_EXPENSE', `Despesa automática: ${parsed.title} (R$ ${(parsed.amount_cents / 100).toFixed(2)})`, user.id);
+      await c.env.DB.prepare(
+        `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary, expense_id)
+         VALUES (?, ?, ?, ?, 'expense', 'processed', ?, ?)`,
+      )
+        .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, notificationMsg, id)
+        .run();
+
+      await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_EXPENSE', `Despesa automática: ${parsed.title} (${formattedAmount})`, user.id);
 
       return c.json({
         ok: true,
         action: 'expense_created',
+        notification_message: notificationMsg,
         data: {
           id,
           title: parsed.title,
           amount_cents: parsed.amount_cents,
-          amount_formatted: `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`,
+          amount_formatted: formattedAmount,
           category: matchedCat?.name,
+          learned_from_history: Boolean(learned),
           payment_method: parsed.payment_method,
           spent_on: today,
         },
@@ -2409,15 +2903,23 @@ app.post('/integrations/nubank', async (c) => {
       }
       await c.env.DB.batch(statements);
 
+      await c.env.DB.prepare(
+        `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary)
+         VALUES (?, ?, ?, ?, 'expense_installments', 'processed', ?)`,
+      )
+        .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, `${notificationMsg} (${parsed.installments}x)`)
+      .run();
+
       await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_EXPENSE_PARCELADO', `Despesa parcelada (${parsed.installments}x): ${parsed.title}`, user.id);
 
       return c.json({
         ok: true,
         action: 'expense_installment_created',
+        notification_message: `${notificationMsg} (${parsed.installments}x)`,
         data: {
           title: parsed.title,
           installments: parsed.installments,
-          total_amount_formatted: `R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')}`,
+          total_amount_formatted: formattedAmount,
           first_installment_formatted: `R$ ${((baseInstallment + remainder) / 100).toFixed(2).replace('.', ',')}`,
           category: matchedCat?.name,
           spent_on: today,
@@ -2450,11 +2952,20 @@ app.post('/integrations/nubank', async (c) => {
       .bind(user.id, parsed.amount_cents, parsed.description, today)
       .first<{ id: number }>())!;
 
+    const inflowSummary = `Entrada recebida: R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')} (${parsed.title})`;
+    await c.env.DB.prepare(
+      `INSERT INTO webhook_logs (user_id, title, body, dedup_hash, parsed_type, status, result_summary)
+       VALUES (?, ?, ?, ?, 'inflow', 'processed', ?)`,
+    )
+      .bind(user.id, title.slice(0, 150), text.slice(0, 300), dedupHash, inflowSummary)
+      .run();
+
     await logSecurityEvent(c.env.DB, c, 'WEBHOOK_NUBANK_INFLOW', `Entrada automática: R$ ${(parsed.amount_cents / 100).toFixed(2)}`, user.id);
 
     return c.json({
       ok: true,
       action: 'inflow_created',
+      notification_message: inflowSummary,
       data: {
         id,
         amount_cents: parsed.amount_cents,

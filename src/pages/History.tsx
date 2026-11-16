@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { api, type Category, type Expense, type Inflow, type UserAccount } from '../api';
+import {
+  api,
+  batchDeleteExpenses,
+  batchUpdateCategory,
+  getCategoryIcon,
+  getExpensesRange,
+  type Category,
+  type Expense,
+  type Inflow,
+  type UserAccount,
+} from '../api';
 import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
-import { dayLabel, formatBRL, monthLabel } from '../format';
+import { dayLabel, formatBRL, monthLabel, parseBRL } from '../format';
 import {
   Card,
   CollapseButton,
@@ -36,11 +46,42 @@ export default function History() {
 
   const [exportOpen, setExportOpen] = useState(false);
   const [exportScope, setExportScope] = useState<string>('all');
+  const [exportStartMonth, setExportStartMonth] = useState<string>(month);
+  const [exportEndMonth, setExportEndMonth] = useState<string>(month);
   const [exporting, setExporting] = useState(false);
 
   async function runExport(kind: 'csv' | 'pdf') {
     setExporting(true);
     try {
+      if (exportScope === 'range' && kind === 'csv') {
+        const rangeExps = await getExpensesRange(exportStartMonth, exportEndMonth);
+        const rows = [
+          ['Data', 'Titulo', 'Categoria', 'Valor (R$)', 'Pagamento', 'Conta', 'Parcela', 'Tags', 'Observacao'],
+          ...rangeExps.map((e) => [
+            e.spent_on,
+            `"${(e.title || '').replace(/"/g, '""')}"`,
+            `"${(e.category_name || '').replace(/"/g, '""')}"`,
+            (e.amount_cents / 100).toFixed(2).replace('.', ','),
+            e.payment_method,
+            e.account_id,
+            e.installment_total > 1 ? `${e.installment_current}/${e.installment_total}` : '1/1',
+            `"${(e.tags || '').replace(/"/g, '""')}"`,
+            `"${(e.description || '').replace(/"/g, '""')}"`,
+          ]),
+        ];
+        const csvContent = '\uFEFF' + rows.map((r) => r.join(';')).join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `capi-finance-${exportStartMonth}-a-${exportEndMonth}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast(`CSV do período (${exportStartMonth} a ${exportEndMonth}) gerado!`);
+        setExportOpen(false);
+        return;
+      }
+
       const data = await fetchExportData();
       if (kind === 'csv') exportCsv(data, exportScope);
       else await exportPdf(data, exportScope);
@@ -58,13 +99,71 @@ export default function History() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
 
-  // Filtros
+  // Filtros Combinados (Itens 20, 41, 44, 46)
   const initialCategory = searchParams.get('categoria') || 'all';
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCategory);
   const [selectedAccount, setSelectedAccount] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'inflow'>('all');
-  const [search, setSearch] = useState<string>('');
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'credit' | 'debit_pix'>('all');
+  const [search, setSearch] = useState<string>(searchParams.get('busca') || '');
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+
+  // Ações em Lote (Itens 42 e 43)
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchCatId, setBatchCatId] = useState<string>('');
+  const [batchBusy, setBatchBusy] = useState(false);
+
+  function toggleSelectExpense(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBatchCategory() {
+    if (selectedIds.size === 0) return toast('Selecione ao menos 1 lançamento', 'error');
+    if (!batchCatId) return toast('Escolha a nova categoria', 'error');
+    setBatchBusy(true);
+    try {
+      const res = await batchUpdateCategory(Array.from(selectedIds), Number(batchCatId));
+      toast(`${res.updated_count} lançamento(s) movido(s) para a nova categoria!`);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+      await load();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function handleBatchDelete() {
+    if (selectedIds.size === 0) return toast('Selecione ao menos 1 lançamento', 'error');
+    const ok = await confirm({
+      title: `Excluir ${selectedIds.size} Lançamento(s)?`,
+      message: `Deseja realmente excluir os ${selectedIds.size} lançamentos selecionados de uma vez?`,
+      confirmText: 'Excluir Todos Selecionados',
+      cancelText: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
+    setBatchBusy(true);
+    try {
+      const res = await batchDeleteExpenses(Array.from(selectedIds));
+      toast(`${res.deleted_count} lançamento(s) excluído(s)!`);
+      setSelectedIds(new Set());
+      setBatchMode(false);
+      await load();
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    } finally {
+      setBatchBusy(false);
+    }
+  }
 
   // Sincroniza se o parâmetro na URL mudar
   useEffect(() => {
@@ -175,6 +274,21 @@ export default function History() {
     const q = search.trim().toLowerCase();
     const result: ExtratoItem[] = [];
 
+    // Item 46: Operadores de busca por valor exato ou aproximado (ex: ">100", "<50", "=42,80")
+    let valOperator: '>' | '<' | '=' | null = null;
+    let valTargetCents: number | null = null;
+    if (/^[><=]\s*\d/.test(q)) {
+      valOperator = q[0] as '>' | '<' | '=';
+      valTargetCents = parseBRL(q.slice(1).trim());
+    }
+
+    const checkValueMatch = (cents: number) => {
+      if (!valOperator || valTargetCents === null) return true;
+      if (valOperator === '>') return cents >= valTargetCents;
+      if (valOperator === '<') return cents <= valTargetCents;
+      return Math.abs(cents - valTargetCents) <= 50; // margem de R$ 0,50 ou exato
+    };
+
     // Saídas (Expenses)
     if (typeFilter === 'all' || typeFilter === 'expense') {
       (expenses ?? []).forEach((item) => {
@@ -182,27 +296,38 @@ export default function History() {
           selectedCategory === 'all' || item.category_id === Number(selectedCategory);
         const matchesAccount =
           selectedAccount === 'all' || item.account_id === selectedAccount;
+        const matchesPayment =
+          paymentFilter === 'all' ||
+          (paymentFilter === 'credit' && item.payment_method === 'credit') ||
+          (paymentFilter === 'debit_pix' && item.payment_method !== 'credit');
+
         const matchesSearch =
           !q ||
-          (item.title && item.title.toLowerCase().includes(q)) ||
-          (item.description && item.description.toLowerCase().includes(q)) ||
-          item.category_name.toLowerCase().includes(q);
+          (valOperator && valTargetCents !== null
+            ? checkValueMatch(item.amount_cents)
+            : (item.title && item.title.toLowerCase().includes(q)) ||
+              (item.description && item.description.toLowerCase().includes(q)) ||
+              (item.tags && item.tags.toLowerCase().includes(q)) ||
+              item.category_name.toLowerCase().includes(q) ||
+              (item.amount_cents / 100).toFixed(2).replace('.', ',').includes(q));
 
-        if (matchesCategory && matchesAccount && matchesSearch) {
+        if (matchesCategory && matchesAccount && matchesPayment && matchesSearch) {
           result.push({ kind: 'expense', data: item, date: item.spent_on, id: `exp_${item.id}` });
         }
       });
     }
 
     // Entradas (Inflows)
-    if (typeFilter === 'all' || typeFilter === 'inflow') {
+    if ((typeFilter === 'all' || typeFilter === 'inflow') && paymentFilter === 'all') {
       (inflows ?? []).forEach((item) => {
-        // Se houver filtro de categoria selecionado, entradas não possuem categoria de despesa
         const matchesCategory = selectedCategory === 'all';
         const matchesAccount =
           selectedAccount === 'all' || item.account_id === selectedAccount;
         const matchesSearch =
-          !q || (item.description && item.description.toLowerCase().includes(q));
+          !q ||
+          (valOperator && valTargetCents !== null
+            ? checkValueMatch(item.amount_cents)
+            : (item.description && item.description.toLowerCase().includes(q)));
 
         if (matchesCategory && matchesAccount && matchesSearch) {
           result.push({ kind: 'inflow', data: item, date: item.received_on, id: `inf_${item.id}` });
@@ -211,7 +336,7 @@ export default function History() {
     }
 
     return result;
-  }, [expenses, inflows, typeFilter, selectedCategory, selectedAccount, search]);
+  }, [expenses, inflows, typeFilter, paymentFilter, selectedCategory, selectedAccount, search]);
 
   const totalFilteredExpenses = useMemo(() => {
     return filteredItems
@@ -345,15 +470,21 @@ export default function History() {
             </p>
 
             <label className="mt-4 mb-1.5 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
-              Período de exportação
+              Período de exportação (Item 45)
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              {([['all', 'Histórico Completo'], [month, monthLabel(month)]] as const).map(([val, label]) => (
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  ['all', 'Tudo'],
+                  [month, monthLabel(month)],
+                  ['range', 'Meses / Ano'],
+                ] as const
+              ).map(([val, label]) => (
                 <button
                   key={val}
                   type="button"
                   onClick={() => setExportScope(val)}
-                  className={`rounded-xl border px-3 py-2 text-xs font-bold capitalize transition ${
+                  className={`rounded-xl border px-2 py-2 text-[11px] font-bold capitalize transition ${
                     exportScope === val
                       ? 'border-emerald-400 bg-emerald-400/15 text-emerald-300'
                       : 'border-white/[0.08] bg-zinc-900 text-zinc-400'
@@ -363,6 +494,46 @@ export default function History() {
                 </button>
               ))}
             </div>
+
+            {exportScope === 'range' && (
+              <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-zinc-900/60 p-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">Mês Inicial</label>
+                    <input
+                      type="month"
+                      value={exportStartMonth}
+                      onChange={(e) => setExportStartMonth(e.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-black px-2 py-1 text-xs text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">Mês Final</label>
+                    <input
+                      type="month"
+                      value={exportEndMonth}
+                      onChange={(e) => setExportEndMonth(e.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-black px-2 py-1 text-xs text-white"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-1.5 pt-1">
+                  {['2025', '2026'].map((yr) => (
+                    <button
+                      key={yr}
+                      type="button"
+                      onClick={() => {
+                        setExportStartMonth(`${yr}-01`);
+                        setExportEndMonth(`${yr}-12`);
+                      }}
+                      className="flex-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 py-1 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/20"
+                    >
+                      Ano Inteiro {yr}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="mt-4 grid grid-cols-2 gap-2.5">
               <button
@@ -534,14 +705,121 @@ export default function History() {
           ))}
         </div>
 
+        {/* Item 20 & 42/43: Alternador Rápido Crédito vs Débito + Botão Modo Lote */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.07] bg-zinc-950 p-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('all')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                paymentFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Todas Modalidades
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('credit')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                paymentFilter === 'credit'
+                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              💳 Apenas Crédito
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentFilter('debit_pix')}
+              className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                paymentFilter === 'debit_pix'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              ⚡ Apenas Débito / Pix
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setBatchMode((b) => !b);
+              setSelectedIds(new Set());
+            }}
+            className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
+              batchMode
+                ? 'border-amber-500/40 bg-amber-500/20 text-amber-300'
+                : 'border-white/[0.08] bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+            }`}
+          >
+            {batchMode ? '✕ Sair da Seleção em Lote' : '☑️ Seleção em Lote'}
+          </button>
+        </div>
+
+        {/* Barra de Ações em Lote (Itens 42 e 43) */}
+        {batchMode && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-amber-950/20 p-3 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-amber-300">
+                {selectedIds.size} selecionado(s)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const allExpIds = filteredItems
+                    .filter((i): i is ExtratoItem & { kind: 'expense' } => i.kind === 'expense')
+                    .map((i) => i.data.id);
+                  if (selectedIds.size === allExpIds.length) setSelectedIds(new Set());
+                  else setSelectedIds(new Set(allExpIds));
+                }}
+                className="text-[11px] font-semibold text-zinc-300 underline hover:text-white"
+              >
+                Selecionar/Desmarcar Todos
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={batchCatId}
+                onChange={(e) => setBatchCatId(e.target.value)}
+                className="rounded-xl border border-white/15 bg-zinc-900 px-2.5 py-1.5 text-xs text-white"
+              >
+                <option value="">Mover p/ categoria...</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={batchBusy || selectedIds.size === 0 || !batchCatId}
+                onClick={handleBatchCategory}
+                className="rounded-xl bg-emerald-400 px-3 py-1.5 text-xs font-extrabold text-black hover:bg-emerald-300 disabled:opacity-40"
+              >
+                Aplicar Categoria
+              </button>
+              <button
+                type="button"
+                disabled={batchBusy || selectedIds.size === 0}
+                onClick={handleBatchDelete}
+                className="rounded-xl bg-red-500 px-3 py-1.5 text-xs font-extrabold text-white hover:bg-red-400 disabled:opacity-40"
+              >
+                🗑️ Excluir Lote
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Busca e Dropdown de Categorias */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {/* Busca por texto */}
+          {/* Busca por texto ou operador de valor (Item 46) */}
           <div className="relative">
             <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
             <input
               type="text"
-              placeholder="Buscar lançamento por nome, loja ou detalhe..."
+              placeholder="Buscar nome, #tag ou valor (ex: >100, <50, =42,80)..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-500/60"
@@ -564,7 +842,7 @@ export default function History() {
               { value: 'all', label: 'Todas as categorias' },
               ...categories.map((c) => ({
                 value: String(c.id),
-                label: c.name,
+                label: `${getCategoryIcon(c.name, c.icon)} ${c.name}`,
               })),
             ]}
             placeholder="Selecione uma categoria"
@@ -582,13 +860,14 @@ export default function History() {
       ) : filteredItems.length === 0 ? (
         <Card className="text-center py-12 text-zinc-500">
           <p className="text-sm font-medium">Nenhum lançamento encontrado para os filtros selecionados.</p>
-          {(search || selectedCategory !== 'all' || selectedAccount !== 'all' || typeFilter !== 'all') && (
+          {(search || selectedCategory !== 'all' || selectedAccount !== 'all' || typeFilter !== 'all' || paymentFilter !== 'all') && (
             <button
               onClick={() => {
                 setSearch('');
                 handleCategorySelect('all');
                 setSelectedAccount('all');
                 setTypeFilter('all');
+                setPaymentFilter('all');
               }}
               className="mt-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 transition"
             >
@@ -598,13 +877,25 @@ export default function History() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {grouped.map(([day, items]) => (
+          {grouped.map(([day, items]) => {
+            const daySubtotalExpenses = items
+              .filter((i): i is ExtratoItem & { kind: 'expense' } => i.kind === 'expense')
+              .reduce((s, i) => s + i.data.amount_cents, 0);
+            return (
             <div key={day}>
-              <div className="mb-1.5 flex justify-between px-1 text-xs font-semibold text-zinc-400">
-                <span className="capitalize">{dayLabel(day)}</span>
-                <span className="tabular-nums text-zinc-400">
-                  {items.length} {items.length === 1 ? 'registro' : 'registros'}
-                </span>
+              {/* Item 47: Cabeçalho do Dia com Subtotal Diário */}
+              <div className="mb-1.5 flex items-center justify-between px-1 text-xs font-semibold text-zinc-400">
+                <span className="capitalize font-bold text-zinc-300">{dayLabel(day)}</span>
+                <div className="flex items-center gap-3 tabular-nums">
+                  {daySubtotalExpenses > 0 && (
+                    <span className="text-rose-400/90 font-bold">
+                      Subtotal: -{formatBRL(daySubtotalExpenses)}
+                    </span>
+                  )}
+                  <span className="text-zinc-500">
+                    {items.length} {items.length === 1 ? 'registro' : 'registros'}
+                  </span>
+                </div>
               </div>
               <Card className="divide-y divide-white/[0.06] !p-0 overflow-hidden">
                 {items.map((item) => {
@@ -649,18 +940,35 @@ export default function History() {
 
                   // Saída (Expense)
                   const exp = item.data;
+                  const isCheckedBatch = selectedIds.has(exp.id);
                   return (
                     <div
                       key={item.id}
-                      className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition"
+                      onClick={() => batchMode && toggleSelectExpense(exp.id)}
+                      className={`flex items-center gap-3 px-4 py-3.5 transition ${
+                        batchMode ? 'cursor-pointer' : ''
+                      } ${
+                        isCheckedBatch
+                          ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                          : 'hover:bg-zinc-900/50'
+                      }`}
                     >
+                      {batchMode && (
+                        <input
+                          type="checkbox"
+                          checked={isCheckedBatch}
+                          onChange={() => toggleSelectExpense(exp.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-4 w-4 shrink-0 accent-amber-400"
+                        />
+                      )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="font-bold text-sm text-zinc-100">
                             {exp.title || exp.category_name}
                           </p>
                           <span className="inline-block rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-emerald-400 border border-white/[0.07]">
-                            {exp.category_name}
+                            {getCategoryIcon(exp.category_name)} {exp.category_name}
                           </span>
                           <span
                             className={`rounded-md px-2 py-0.5 text-[10px] font-semibold border ${
@@ -687,8 +995,26 @@ export default function History() {
                               ? 'Pluxe Alim.'
                               : exp.account_id === 'pluxe_refeicao'
                               ? 'Pluxe Ref.'
-                              : 'Alelo'}
+                              : exp.account_id.toUpperCase()}
                           </span>
+                          {/* Item 44: Tags */}
+                          {exp.tags &&
+                            exp.tags
+                              .split(/\s+/)
+                              .filter(Boolean)
+                              .map((tg) => (
+                                <button
+                                  key={tg}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSearch(tg);
+                                  }}
+                                  className="rounded-full bg-cyan-500/15 border border-cyan-500/30 px-2 py-0.5 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/25"
+                                >
+                                  {tg.startsWith('#') ? tg : `#${tg}`}
+                                </button>
+                              ))}
                         </div>
                         {exp.description && (
                           <p className="truncate text-xs text-zinc-400 mt-0.5 font-normal">{exp.description}</p>
@@ -718,7 +1044,8 @@ export default function History() {
                 })}
               </Card>
             </div>
-          ))}
+          );
+          })}
         </div>
       ))}
         </>

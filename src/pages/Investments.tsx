@@ -475,6 +475,134 @@ export default function Investments() {
         )}
       </div>
 
+      {/* ================= ITENS 51, 52 E 56: PROJEÇÃO DIÁRIA CDI, INFLAÇÃO E GRÁFICO DE EVOLUÇÃO ================= */}
+      {(() => {
+        const baseBalance = latestSummary?.totalBalance ?? 0;
+        // Taxa CDI estimada ~11.15% a.a. (~0.042% por dia útil / ~0.88% ao mês)
+        const now = new Date();
+        const dayOfMonth = now.getDate();
+        const businessDaysElapsed = Math.max(1, Math.round((dayOfMonth / 30) * 21));
+        const dailyRate = 0.00042; // ~100% CDI diário
+        const dailyYieldCents = Math.round(baseBalance * dailyRate);
+        const projectedSoFarCents = Math.round(baseBalance * (Math.pow(1 + dailyRate, businessDaysElapsed) - 1));
+        const projectedFullMonthCents = Math.round(baseBalance * (Math.pow(1 + dailyRate, 21) - 1));
+
+        // Item 56: Comparador vs Inflação (IPCA médio estimado ~0,38% a.m.)
+        const ipcaMonthlyRate = 0.0038;
+        const inflationCostCents = Math.round(baseBalance * ipcaMonthlyRate);
+        const actualYieldCents = (latestSummary?.valorizacaoInvest ?? 0) > 0 ? latestSummary!.valorizacaoInvest : projectedFullMonthCents;
+        const realGainAboveInflationCents = actualYieldCents - inflationCostCents;
+
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            {/* Item 51 & 56: Projeção Diária CDI + Ganho Real vs IPCA */}
+            <Card className="lg:col-span-5 border-emerald-500/25 bg-gradient-to-br from-zinc-950 via-zinc-950 to-emerald-950/20 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                    ⚡ Projeção Diária (~100% CDI)
+                  </span>
+                  <h3 className="text-sm font-extrabold text-white mt-1">
+                    Simulador de Rendimento & Inflação
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openMonthEditor(activeLatestMonth || new Date().toISOString().slice(0, 7))}
+                  className="rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/25 transition"
+                >
+                  ✏️ Dar Veredito Manual
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="rounded-xl border border-white/[0.06] bg-zinc-900/50 p-2.5">
+                  <span className="text-[10px] text-zinc-400 block">Rendimento p/ Dia Útil</span>
+                  <p className="font-extrabold text-emerald-400 text-sm tabular-nums mt-0.5">
+                    +{formatBRL(dailyYieldCents)}/dia
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/[0.06] bg-zinc-900/50 p-2.5">
+                  <span className="text-[10px] text-zinc-400 block">Projetado até Hoje ({businessDaysElapsed} d.u.)</span>
+                  <p className="font-extrabold text-emerald-300 text-sm tabular-nums mt-0.5">
+                    +{formatBRL(projectedSoFarCents)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Item 56: Comparativo vs IPCA */}
+              <div className="rounded-xl border border-white/[0.06] bg-zinc-900/40 p-3 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Projeção Fechamento Mensal (CDI):</span>
+                  <span className="font-bold text-emerald-300 tabular-nums">+{formatBRL(projectedFullMonthCents)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Inflação Estimada no Mês (IPCA ~0,38%):</span>
+                  <span className="font-bold text-amber-400 tabular-nums">-{formatBRL(inflationCostCents)}</span>
+                </div>
+                <div className="flex items-center justify-between border-t border-white/[0.06] pt-1.5">
+                  <span className="font-bold text-zinc-200">Ganho Real Acima da Inflação:</span>
+                  <span className={`font-extrabold tabular-nums ${realGainAboveInflationCents >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {realGainAboveInflationCents >= 0 ? '+' : ''}{formatBRL(realGainAboveInflationCents)}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[10px] text-zinc-500">
+                💡 A projeção acompanha os dias úteis automaticamente; no fim do mês você confirma o saldo exato no botão <strong>Dar Veredito Manual</strong>.
+              </p>
+            </Card>
+
+            {/* Item 52: Gráfico de Evolução Patrimonial */}
+            <Card className="lg:col-span-7 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>📈</span> Curva de Evolução Patrimonial
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Crescimento histórico do seu patrimônio acumulado mês a mês
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-end justify-between gap-2 h-44 pt-6 px-2">
+                {(() => {
+                  const chartMonths = months.slice(-8);
+                  const maxTotal = Math.max(...chartMonths.map((m) => monthlySummaries[m]?.totalBalance ?? 0), 1);
+                  return chartMonths.map((m) => {
+                    const bal = monthlySummaries[m]?.totalBalance ?? 0;
+                    const hPct = Math.max(8, Math.round((bal / maxTotal) * 100));
+                    const isLatest = m === activeLatestMonth;
+                    return (
+                      <div key={m} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end">
+                        <span className="text-[9px] font-bold text-zinc-400 tabular-nums truncate max-w-full">
+                          {bal > 0 ? `R$${(bal / 100000).toFixed(1)}k` : '—'}
+                        </span>
+                        <div className="w-full flex justify-center items-end h-28">
+                          <div
+                            onClick={() => openMonthEditor(m)}
+                            className={`cursor-pointer w-full max-w-10 rounded-t-xl transition-all duration-500 ${
+                              isLatest
+                                ? 'bg-gradient-to-t from-emerald-600 to-teal-300 shadow-lg shadow-emerald-500/25'
+                                : 'bg-zinc-800 hover:bg-zinc-700'
+                            }`}
+                            style={{ height: `${hPct}%` }}
+                            title={`${formatMonthHeader(m)}: ${formatBRL(bal)}`}
+                          />
+                        </div>
+                        <span className={`text-[10px] font-bold uppercase ${isLatest ? 'text-emerald-300' : 'text-zinc-500'}`}>
+                          {formatMonthHeader(m)}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
+
       {/* Distribuição da Carteira por Conta (Com botão de Sacar, Editar e Excluir) */}
       <DistributionChart
         title={`Alocação do Patrimônio (${formatMonthHeader(activeLatestMonth)})`}

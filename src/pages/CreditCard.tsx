@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { api, type Category, type CreditCardInvoice, type Expense } from '../api';
+import { api, getCategoryIcon, type Category, type CreditCardInvoice, type Expense } from '../api';
 import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
 import { centsToInput, dayLabel, formatBRL, formatCurrencyInput, monthLabel, parseBRL } from '../format';
 import {
@@ -507,6 +507,162 @@ export default function CreditCard() {
                   )}
                 </div>
               </>
+            )}
+          </div>
+
+          {/* ================= ITEM 12: SIMULADOR DE FECHAMENTO (DIA 21) & VENCIMENTO (DIA 27) ================= */}
+          {invoice?.cycle && (
+            <div className="rounded-3xl border border-purple-500/30 bg-gradient-to-br from-zinc-950 via-zinc-950 to-purple-950/25 p-5 shadow-xl space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/30 text-sm">
+                    📅
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                      Ciclo da Fatura & Simulador de Fechamento
+                      {new Date().getDate() >= 21 && (
+                        <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                          ✨ Melhor período de compra!
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-[11px] text-zinc-400">
+                      Sua fatura fecha sempre no <strong className="text-purple-300">dia 21</strong> e vence no <strong className="text-amber-300">dia 27</strong>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className="rounded-xl border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 font-bold text-purple-300">
+                    🔒 Fecha dia {invoice.cycle.closing_day}
+                  </span>
+                  <span className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 font-bold text-amber-300">
+                    ⚡ Vence dia {invoice.cycle.due_day}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/50 p-3.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Compras até dia 20
+                  </span>
+                  <p className="mt-1 text-base font-extrabold text-white tabular-nums">
+                    {formatBRL(invoice.cycle.before_closing_cents)}
+                  </p>
+                  <span className="text-[10px] text-zinc-500">Dentro do fechamento do dia 21</span>
+                </div>
+
+                <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/50 p-3.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300">
+                    Compras após dia 21
+                  </span>
+                  <p className="mt-1 text-base font-extrabold text-purple-300 tabular-nums">
+                    {formatBRL(invoice.cycle.after_closing_cents)}
+                  </p>
+                  <span className="text-[10px] text-zinc-500">Realizadas após virada do dia 21</span>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-3.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                    Já Agendado p/ Próximo Mês
+                  </span>
+                  <p className="mt-1 text-base font-extrabold text-emerald-300 tabular-nums">
+                    {formatBRL(invoice.cycle.next_month_scheduled_cents)}
+                  </p>
+                  <span className="text-[10px] text-zinc-500">
+                    Parcelas futuras em {monthLabel(invoice.cycle.next_month)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ================= ITENS 15 & 16: HISTÓRICO DE FATURAS E DIVISÃO POR CATEGORIA ================= */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Item 15: Histórico Gráfico das Últimas 6 Faturas */}
+            {invoice?.history && invoice.history.length > 0 && (
+              <Card className="p-4 sm:p-5 space-y-3">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>📊</span> Evolução das Faturas (Últimos 6 Meses)
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Comparativo histórico dos gastos no cartão de crédito
+                  </p>
+                </div>
+
+                <div className="flex items-end justify-between gap-2 h-36 pt-4 px-1">
+                  {(() => {
+                    const maxVal = Math.max(...invoice.history.map((h) => h.total_cents), 1);
+                    return invoice.history.map((h) => {
+                      const heightPct = Math.max(8, Math.round((h.total_cents / maxVal) * 100));
+                      const isCurr = h.month === month;
+                      return (
+                        <div key={h.month} className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end">
+                          <span className="text-[9px] font-bold text-zinc-400 tabular-nums truncate max-w-full">
+                            {h.total_cents > 0 ? `R$${Math.round(h.total_cents / 100)}` : '—'}
+                          </span>
+                          <div className="w-full flex justify-center items-end h-24">
+                            <div
+                              className={`w-full max-w-9 rounded-t-xl transition-all duration-500 ${
+                                isCurr
+                                  ? 'bg-gradient-to-t from-purple-600 to-fuchsia-400 shadow-lg shadow-purple-500/30'
+                                  : 'bg-zinc-800 hover:bg-zinc-700'
+                              }`}
+                              style={{ height: `${heightPct}%` }}
+                              title={`${monthLabel(h.month)}: ${formatBRL(h.total_cents)}`}
+                            />
+                          </div>
+                          <span className={`text-[10px] font-bold uppercase ${isCurr ? 'text-purple-300' : 'text-zinc-500'}`}>
+                            {h.month.slice(5)}/{h.month.slice(2, 4)}
+                          </span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </Card>
+            )}
+
+            {/* Item 16: Divisão da Fatura Atual por Categoria */}
+            {invoice?.by_category && invoice.by_category.length > 0 && (
+              <Card className="p-4 sm:p-5 space-y-3">
+                <div>
+                  <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <span>🏷️</span> Fatura por Categoria
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Para onde foi o gasto do cartão em {monthLabel(month)}
+                  </p>
+                </div>
+
+                <div className="space-y-2.5 max-h-40 overflow-y-auto pr-1">
+                  {invoice.by_category.map((cat) => {
+                    const pct = invoiceTotal > 0 ? Math.round((cat.total_cents / invoiceTotal) * 100) : 0;
+                    return (
+                      <div key={cat.category_id} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-zinc-200 flex items-center gap-1.5 truncate">
+                            <span>{getCategoryIcon(cat.category_name)}</span>
+                            <span>{cat.category_name}</span>
+                            <span className="text-[10px] text-zinc-500">({cat.count}x)</span>
+                          </span>
+                          <span className="font-extrabold text-purple-300 tabular-nums shrink-0">
+                            {formatBRL(cat.total_cents)} <span className="text-[10px] text-zinc-500">({pct}%)</span>
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-zinc-900 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-purple-500 to-indigo-400"
+                            style={{ width: `${Math.min(100, pct)}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
             )}
           </div>
 

@@ -37,5 +37,35 @@
       "sizes": "any",
       "type": "image/png"
     }
+  ],
+  "shortcuts": [
+    {
+      "name": "Lançar Gasto",
+      "short_name": "Lançar",
+      "description": "Registrar novo gasto ou entrada rapidamente",
+      "url": "/lancar",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Extrato & Filtros",
+      "short_name": "Extrato",
+      "description": "Consultar histórico completo de lançamentos",
+      "url": "/extrato",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Calendário & Lembretes",
+      "short_name": "Calendário",
+      "description": "Ver vencimentos e compromissos do mês",
+      "url": "/calendario",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Fatura do Cartão",
+      "short_name": "Cartão",
+      "description": "Acompanhar fatura atual e fechamento",
+      "url": "/cartao",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

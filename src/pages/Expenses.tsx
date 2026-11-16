@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link, useSearchParams } from 'react-router';
 import {
   api,
+  enqueueOfflineExpense,
+  getCategoryIcon,
+  playSuccessSound,
   type Dashboard,
   type Expense,
   type Inflow,
@@ -56,11 +59,14 @@ export default function Expenses() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   // Estados do Formulário de Saída
-  const [amount, setAmount] = useState('');
-  const [title, setTitle] = useState('');
+  const [amount, setAmount] = useState(params.get('valor') || '');
+  const [calcExpr, setCalcExpr] = useState('');
+  const [showCalc, setShowCalc] = useState(false);
+  const [title, setTitle] = useState(params.get('titulo') || '');
   const [categoryId, setCategoryId] = useState<number | null>(Number(params.get('categoria')) || null);
   const [description, setDescription] = useState('');
-  const [date, setDate] = useState(todayISO);
+  const [tags, setTags] = useState('');
+  const [date, setDate] = useState(params.get('data') || todayISO());
   const [accountId, setAccountId] = useState<string>(params.get('conta') || '');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debit');
   const [installments, setInstallments] = useState(1);
@@ -135,6 +141,30 @@ export default function Expenses() {
     }
   }
 
+  // Item 75: Calculadora embutida no campo de valor (ex: "15 + 28,50")
+  function evaluateCalcExpression() {
+    if (!calcExpr.trim()) return;
+    try {
+      const sanitized = calcExpr
+        .replace(/\./g, '')
+        .replace(/,/g, '.')
+        .replace(/[^0-9+\-*/().\s]/g, '');
+      if (!sanitized) return;
+      // Avalia operação aritmética segura
+      const res = Function(`"use strict"; return (${sanitized})`)();
+      if (typeof res === 'number' && Number.isFinite(res) && res > 0) {
+        setAmount(res.toFixed(2).replace('.', ','));
+        setCalcExpr('');
+        setShowCalc(false);
+        toast(`Calculado: R$ ${res.toFixed(2).replace('.', ',')}`);
+      } else {
+        toast('Expressão inválida', 'error');
+      }
+    } catch {
+      toast('Não foi possível calcular a expressão', 'error');
+    }
+  }
+
   // Submissão de Saída
   async function submitExpense(e: FormEvent) {
     e.preventDefault();
@@ -143,31 +173,43 @@ export default function Expenses() {
     if (!title.trim()) return toast('Informe o título do gasto', 'error');
     if (!categoryId) return toast('Escolha uma categoria', 'error');
     setBusy(true);
-    try {
-      await api<Expense>('/expenses', {
-        method: 'POST',
-        body: {
-          amount_cents: cents,
-          category_id: categoryId,
-          title: title.trim(),
-          description: description.trim(),
-          spent_on: date,
-          account_id: accountId,
-          payment_method: paymentMethod,
-          installments: accountId === 'nubank' && paymentMethod === 'credit' ? installments : 1,
-        },
-      });
 
-      const accInfo = accountsList.find((a) => a.id === accountId);
-      if (accountId === 'nubank' && paymentMethod === 'credit' && installments > 1) {
-        toast(`${formatBRL(cents)} parcelado em ${installments}x de ${formatBRL(Math.round(cents / installments))}`);
+    const payload = {
+      amount_cents: cents,
+      category_id: categoryId,
+      title: title.trim(),
+      description: description.trim(),
+      tags: tags.trim(),
+      spent_on: date,
+      account_id: accountId,
+      payment_method: paymentMethod,
+      installments: accountId === 'nubank' && paymentMethod === 'credit' ? installments : 1,
+    };
+
+    try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        enqueueOfflineExpense(payload);
+        playSuccessSound('coin');
+        toast('📴 Sem internet: Lançamento salvo no Modo Offline! Sincronizará assim que conectar.');
       } else {
-        toast(`${formatBRL(cents)} registrado como saída em ${accInfo?.name ?? 'Conta'}`);
+        await api<Expense>('/expenses', {
+          method: 'POST',
+          body: payload,
+        });
+        playSuccessSound('coin');
+
+        const accInfo = accountsList.find((a) => a.id === accountId);
+        if (accountId === 'nubank' && paymentMethod === 'credit' && installments > 1) {
+          toast(`${formatBRL(cents)} parcelado em ${installments}x de ${formatBRL(Math.round(cents / installments))}`);
+        } else {
+          toast(`${formatBRL(cents)} registrado como saída em ${accInfo?.name ?? 'Conta'}`);
+        }
       }
 
       setAmount('');
       setTitle('');
       setDescription('');
+      setTags('');
       if (accountId === 'nubank') {
         setPaymentMethod('debit');
       }
@@ -176,7 +218,12 @@ export default function Expenses() {
       if (date.slice(0, 7) !== month) setMonth(date.slice(0, 7));
       else await load();
     } catch (err) {
-      toast((err as Error).message, 'error');
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        enqueueOfflineExpense(payload);
+        toast('📴 Salvo na fila Offline! Sincronizará automaticamente ao reconectar.');
+      } else {
+        toast((err as Error).message, 'error');
+      }
     } finally {
       setBusy(false);
     }
@@ -199,6 +246,7 @@ export default function Expenses() {
           received_on: inflowDate,
         },
       });
+      playSuccessSound('coin');
 
       const accInfo = accountsList.find((a) => a.id === inflowAccountId);
       toast(`+ ${formatBRL(cents)} creditado no saldo de ${accInfo?.name ?? 'Conta'}!`);
@@ -501,21 +549,34 @@ export default function Expenses() {
       {entryType === 'expense' && (
         <Card className="!p-5 sm:!p-6">
           <form onSubmit={submitExpense} className="space-y-5">
-            {/* 1. VALOR EM DESTAQUE */}
-            <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-zinc-900/90 to-zinc-950 p-4 focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20 transition">
-              <div className="flex items-center justify-between">
+            {/* 1. VALOR EM DESTAQUE + CALCULADORA EMBUTIDA (ITEM 75) */}
+            <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-zinc-900/90 to-zinc-950 p-4 focus-within:border-emerald-500/60 focus-within:ring-2 focus-within:ring-emerald-500/20 transition space-y-2">
+              <div className="flex items-center justify-between gap-2">
                 <label className="text-[11px] font-bold tracking-wider text-zinc-400 uppercase">
                   Valor da Saída (Gasto)
                 </label>
-                {accountId === 'nubank' && paymentMethod === 'credit' && installments > 1 && (
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setIsInstallmentModalOpen(true)}
-                    className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2.5 py-0.5 text-xs font-bold text-purple-300 hover:bg-purple-500/30 transition"
+                    onClick={() => setShowCalc((v) => !v)}
+                    className={`rounded-lg border px-2 py-0.5 text-[11px] font-bold transition ${
+                      showCalc
+                        ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300'
+                        : 'border-white/10 bg-zinc-900 text-zinc-400 hover:text-white'
+                    }`}
                   >
-                    {installments}x {parsedAmount ? `de ${formatBRL(currentInstallmentValue)}` : ''} • alterar
+                    🧮 Calculadora
                   </button>
-                )}
+                  {accountId === 'nubank' && paymentMethod === 'credit' && installments > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsInstallmentModalOpen(true)}
+                      className="rounded-full bg-purple-500/20 border border-purple-500/40 px-2.5 py-0.5 text-xs font-bold text-purple-300 hover:bg-purple-500/30 transition"
+                    >
+                      {installments}x {parsedAmount ? `de ${formatBRL(currentInstallmentValue)}` : ''} • alterar
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="mt-1 flex items-baseline gap-2">
                 <span className="text-2xl font-bold text-emerald-400 select-none">R$</span>
@@ -527,6 +588,43 @@ export default function Expenses() {
                   className="w-full bg-transparent py-1 text-3xl sm:text-4xl font-black tracking-tight text-white tabular-nums outline-none placeholder:text-zinc-700"
                 />
               </div>
+
+              {showCalc && (
+                <div className="pt-2 border-t border-white/[0.06] space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={calcExpr}
+                      onChange={(e) => setCalcExpr(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          evaluateCalcExpression();
+                        }
+                      }}
+                      placeholder="Ex: 15 + 28,50 + 12"
+                      className="flex-1 rounded-xl border border-white/10 bg-black/70 px-3 py-1.5 text-xs font-mono text-emerald-300 placeholder:text-zinc-600 outline-none"
+                    />
+                    {['+', '-', '*'].map((op) => (
+                      <button
+                        key={op}
+                        type="button"
+                        onClick={() => setCalcExpr((p) => `${p || amount} ${op} `)}
+                        className="rounded-lg border border-white/10 bg-zinc-800 px-2.5 py-1.5 text-xs font-extrabold text-white hover:bg-zinc-700"
+                      >
+                        {op}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={evaluateCalcExpression}
+                      className="rounded-xl bg-emerald-400 px-3 py-1.5 text-xs font-extrabold text-black hover:bg-emerald-300"
+                    >
+                      = Calcular
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 2. CONTA E FORMA DE PAGAMENTO */}
@@ -657,6 +755,7 @@ export default function Expenses() {
                                   : 'border-white/[0.07] bg-zinc-900 text-zinc-300 hover:border-white/20 hover:bg-zinc-800'
                               }`}
                             >
+                              <span className="mr-1">{getCategoryIcon(c.name, c.icon)}</span>
                               {c.name}
                               {pct >= 100 && !active && (
                                 <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-400" title="Teto atingido" />
@@ -689,6 +788,7 @@ export default function Expenses() {
                                   : 'border-purple-500/20 bg-purple-950/20 text-purple-200 hover:border-purple-500/40 hover:bg-purple-900/30'
                               }`}
                             >
+                              <span className="mr-1">{getCategoryIcon(c.name, c.icon)}</span>
                               {c.name}
                             </button>
                           );
@@ -798,6 +898,33 @@ export default function Expenses() {
                     required
                     className="sm:w-44"
                   />
+                </div>
+              </div>
+
+              {/* Item 44: Tags Opcionais */}
+              <div>
+                <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
+                  Tags / Marcadores (opcional)
+                </label>
+                <Input
+                  placeholder="Ex: #viagem #casa #reforma"
+                  value={tags}
+                  onChange={(e) => setTags(e.target.value)}
+                  maxLength={120}
+                />
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {['#mercado', '#casa', '#viagem', '#lazer', '#trabalho', '#emergencia'].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        setTags((prev) => (prev.includes(t) ? prev : `${prev} ${t}`.trim()))
+                      }
+                      className="rounded-lg border border-white/[0.07] bg-zinc-900/60 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 hover:border-emerald-500/40 hover:text-emerald-300 transition"
+                    >
+                      {t}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>

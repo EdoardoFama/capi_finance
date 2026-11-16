@@ -1,5 +1,5 @@
 export interface ParsedNubankEvent {
-  type: 'expense' | 'inflow' | 'ignore';
+  type: 'expense' | 'inflow' | 'refund' | 'ignore';
   amount_cents: number;
   title: string;
   description: string;
@@ -53,7 +53,58 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     fullText.match(/(\d+,\d{2})/i);
   const amount_cents = amountMatch ? parseBrlCents(amountMatch[1]) : 0;
 
-  // 1.1 Filtrar e ignorar compras negadas, recusadas, canceladas ou bloqueadas
+  // 1.1 Detectar Estorno / Reembolso / Devolução (Item 02)
+  const isRefund =
+    lower.includes('estorno') ||
+    lower.includes('estornada') ||
+    lower.includes('estornado') ||
+    lower.includes('reembolso') ||
+    lower.includes('reembolsada') ||
+    lower.includes('reembolsado') ||
+    lower.includes('devolução') ||
+    lower.includes('devolucao') ||
+    lower.includes('pix devolvido') ||
+    lower.includes('compra cancelada e estornada');
+
+  if (isRefund && amount_cents > 0) {
+    let estab = 'Estorno';
+    const estabMatch =
+      fullText.match(/(?:em|no|na|de)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:foi|no\s+valor|\.|$))/i);
+    if (estabMatch && estabMatch[1].trim()) {
+      estab = cleanEstablishmentName(estabMatch[1].trim());
+    }
+    return {
+      type: 'refund',
+      amount_cents,
+      title: estab.slice(0, 120),
+      description: `Estorno/Reembolso automático (${estab})`,
+      payment_method: lower.includes('pix') ? 'pix' : 'credit',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.2 Detectar Transferência entre Contas Próprias / Mesma Titularidade (Item 06)
+  const isSelfTransfer =
+    lower.includes('mesma titularidade') ||
+    lower.includes('entre suas contas') ||
+    lower.includes('conta própria') ||
+    lower.includes('conta propria') ||
+    (lower.includes('edoardo') && (lower.includes('transferiu') || lower.includes('pix enviado')));
+
+  if (isSelfTransfer) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Transferência Entre Contas Próprias',
+      description: 'Transferência interna entre contas da mesma titularidade (ignorada para não duplicar saldo)',
+      payment_method: 'pix',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.3 Filtrar e ignorar compras negadas, recusadas, canceladas ou bloqueadas
   const isDenied =
     lower.includes('negada') ||
     lower.includes('negado') ||
