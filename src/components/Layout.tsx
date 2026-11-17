@@ -352,17 +352,17 @@ export default function Layout() {
 
       {/* Header Superior Glassmorphic */}
       <header className="pt-safe sticky top-0 z-30 w-full border-b border-white/[0.07] bg-[#060609]/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 sm:h-16 max-w-5xl items-center justify-between px-3 sm:px-4 gap-2 w-full">
-          {/* Logo & Marca */}
-          <Link to="/" className="flex items-center gap-2 group min-w-0 shrink">
-            <div className="relative flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-zinc-900 border border-emerald-500/30 p-1 shadow-inner transition group-hover:border-emerald-400/60">
-              <img src="/logo.png" alt="Capi Finance" className="h-6 w-6 sm:h-7 sm:w-7 object-contain" />
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 gap-4 w-full">
+          {/* Logo & Marca (Nunca encolhe) */}
+          <Link to="/" className="flex items-center gap-2.5 group shrink-0">
+            <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 to-zinc-900 border border-emerald-500/30 p-1 shadow-inner transition group-hover:border-emerald-400/60">
+              <img src="/logo.png" alt="Capi Finance" className="h-7 w-7 object-contain" />
             </div>
-            <div className="flex flex-col min-w-0">
-              <span className="text-sm sm:text-base font-extrabold tracking-tight text-white leading-tight truncate">
+            <div className="flex flex-col whitespace-nowrap">
+              <span className="text-base font-extrabold tracking-tight text-white leading-tight">
                 Capi <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">Finance</span>
               </span>
-              <span className="text-[9px] sm:text-[10px] font-medium text-zinc-400 tracking-wider uppercase leading-none hidden sm:inline mt-0.5">
+              <span className="text-[10px] font-medium text-zinc-400 tracking-wider uppercase leading-none hidden sm:inline mt-0.5">
                 Gestão Pessoal
               </span>
             </div>
@@ -376,7 +376,7 @@ export default function Layout() {
                 to={to}
                 end={end}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-all ${
+                  `flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold transition-all ${
                     to === '/lancar'
                       ? isActive
                         ? 'bg-emerald-400 text-black shadow-md shadow-emerald-500/20'
@@ -395,7 +395,7 @@ export default function Layout() {
               <NavLink
                 to="/admin"
                 className={({ isActive }) =>
-                  `rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                  `rounded-xl px-2.5 py-1.5 text-xs font-semibold transition ${
                     isActive
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                       : 'text-amber-400/80 hover:text-amber-300'
@@ -408,12 +408,12 @@ export default function Layout() {
           </nav>
 
           {/* Ações Rápidas & Perfil */}
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             {/* Botão Modo Privacidade (Olhinho) */}
             <button
               type="button"
               onClick={togglePrivacy}
-              className={`flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border transition active:scale-95 ${
+              className={`flex h-9 w-9 items-center justify-center rounded-xl border transition active:scale-95 ${
                 isPrivate
                   ? 'border-amber-500/40 bg-amber-500/20 text-amber-300 shadow-sm shadow-amber-500/15'
                   : 'border-white/[0.08] bg-zinc-900/60 text-zinc-400 hover:text-white hover:bg-zinc-800'
@@ -425,14 +425,14 @@ export default function Layout() {
               }
               aria-label="Modo Privacidade"
             >
-              {isPrivate ? <IconEyeOff className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> : <IconEye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
+              {isPrivate ? <IconEyeOff className="h-4 w-4" /> : <IconEye className="h-4 w-4" />}
             </button>
 
             {/* Botão Bloquear Tela (PIN 1201 / Biometria) */}
             <button
               type="button"
               onClick={handleLockNow}
-              className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-emerald-300 active:scale-95"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-emerald-300 active:scale-95"
               title="Bloquear aplicativo agora (PIN / Biometria)"
               aria-label="Bloquear tela"
             >
@@ -443,7 +443,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setShowSettingsModal(true)}
-              className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-white active:scale-95"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-white active:scale-95"
               title="Configurações, Temas, PIN e Ferramentas"
               aria-label="Configurações e Ferramentas"
             >
@@ -454,28 +454,15 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setShowAutomationModal(true)}
-              className="hidden md:flex items-center gap-1.5 rounded-xl border border-purple-500/30 bg-purple-500/10 px-2.5 py-1.5 text-xs font-bold text-purple-300 transition hover:bg-purple-500/20 active:scale-95 shadow-sm shadow-purple-500/10"
+              className="hidden lg:flex items-center gap-1.5 rounded-xl border border-purple-500/30 bg-purple-500/10 px-2.5 py-1.5 text-xs font-bold text-purple-300 transition hover:bg-purple-500/20 active:scale-95 shadow-sm shadow-purple-500/10"
               title="Automação Nubank (MacroDroid)"
             >
               <span>⚡</span>
               <span>Automação</span>
             </button>
 
-            {/* Desktop Only: Botão Instalar */}
-            {!isStandalone && (deferredPrompt || isIos) && (
-              <button
-                type="button"
-                onClick={() => setShowInstallModal(true)}
-                className="hidden md:flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20 active:scale-95 shadow-sm shadow-emerald-500/10"
-                title="Instalar Capi Finance como app no celular"
-              >
-                <span>📱</span>
-                <span>Instalar</span>
-              </button>
-            )}
-
             {/* Desktop Only: Perfil */}
-            <div className="hidden lg:flex items-center gap-2 rounded-full border border-white/[0.07] bg-zinc-900/70 py-1 pl-1.5 pr-3">
+            <div className="hidden xl:flex items-center gap-2 rounded-full border border-white/[0.07] bg-zinc-900/70 py-1 pl-1.5 pr-3">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20 text-xs font-bold text-emerald-300 border border-emerald-500/30">
                 {initial}
               </span>
@@ -485,11 +472,11 @@ export default function Layout() {
             {/* Botão Sair */}
             <button
               onClick={handleLogout}
-              className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-transparent text-zinc-400 transition hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400 active:scale-95"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-zinc-400 transition hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400 active:scale-95"
               title="Sair da conta"
               aria-label="Sair da conta"
             >
-              <IconLogout className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <IconLogout className="h-4 w-4" />
             </button>
           </div>
         </div>
