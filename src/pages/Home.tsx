@@ -549,12 +549,12 @@ export default function Home() {
             // Humor do Mascote Capi (Item 93)
             const mascot =
               score >= 85
-                ? { emoji: '🦫✨', mood: 'Capi Investidora', color: 'text-emerald-300', msg: 'Suas finanças estão impecáveis! Ritmo excelente para multiplicar patrimônio.' }
+                ? { badge: '✨', mood: 'Capi Investidora', color: 'text-emerald-300', msg: 'Suas finanças estão impecáveis! Ritmo excelente para multiplicar patrimônio.' }
                 : score >= 65
-                ? { emoji: '🦫😎', mood: 'Capi Tranquila', color: 'text-teal-300', msg: 'Orçamento sob controle! Continue acompanhando seus tetos semanais.' }
+                ? { badge: '😎', mood: 'Capi Tranquila', color: 'text-teal-300', msg: 'Orçamento sob controle! Continue acompanhando seus tetos semanais.' }
                 : score >= 45
-                ? { emoji: '🦫😅', mood: 'Capi Atenta', color: 'text-amber-300', msg: 'Atenção redobrada! Algumas categorias já passaram de 80% do teto.' }
-                : { emoji: '🦫🚨', mood: 'Capi Preocupada', color: 'text-red-300', msg: 'Hora de segurar o freio! Revise os gastos variáveis para proteger seu fechamento.' };
+                ? { badge: '😅', mood: 'Capi Atenta', color: 'text-amber-300', msg: 'Atenção redobrada! Algumas categorias já passaram de 80% do teto.' }
+                : { badge: '🚨', mood: 'Capi Preocupada', color: 'text-red-300', msg: 'Hora de segurar o freio! Revise os gastos variáveis para proteger seu fechamento.' };
 
             // Sugestão Inteligente de Economia (Item 70)
             const topCat = [...data.categories].sort((a, b) => b.spent_cents - a.spent_cents)[0];
@@ -570,8 +570,14 @@ export default function Home() {
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
                 {/* Mascote + Diagnóstico IA */}
                 <div className="md:col-span-8 flex items-center gap-3.5 rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-3.5 shadow-lg">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-2xl">
-                    {mascot.emoji}
+                  <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/15 via-zinc-900 to-zinc-950 p-1.5 shadow-inner">
+                    <img src="/logo.png" alt="Mascote Capi" className="h-8 w-8 object-contain drop-shadow select-none" />
+                    <span
+                      className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-950 border border-white/20 text-[11px] shadow-md select-none"
+                      title={mascot.mood}
+                    >
+                      {mascot.badge}
+                    </span>
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">

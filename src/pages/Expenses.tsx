@@ -464,7 +464,7 @@ export default function Expenses() {
                         type="button"
                         key={acc.id}
                         onClick={() => setInflowAccountId(acc.id)}
-                        className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
+                        className={`min-w-0 flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
                           active
                             ? 'border-emerald-500/80 bg-emerald-500/15 ring-2 ring-emerald-500/30 shadow-lg scale-[1.02]'
                             : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
@@ -603,7 +603,7 @@ export default function Expenses() {
                         }
                       }}
                       placeholder="Ex: 15 + 28,50 + 12"
-                      className="flex-1 rounded-xl border border-white/10 bg-black/70 px-3 py-1.5 text-xs font-mono text-emerald-300 placeholder:text-zinc-600 outline-none"
+                      className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/70 px-3 py-1.5 text-xs font-mono text-emerald-300 placeholder:text-zinc-600 outline-none"
                     />
                     {['+', '-', '*'].map((op) => (
                       <button
@@ -652,7 +652,7 @@ export default function Expenses() {
                         onClick={() => {
                           setAccountId(acc.id);
                         }}
-                        className={`flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
+                        className={`min-w-0 flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
                           active
                             ? 'border-emerald-500/80 bg-emerald-500/15 ring-2 ring-emerald-500/30 shadow-lg'
                             : 'border-white/[0.07] bg-zinc-900/70 text-zinc-400 hover:border-white/15 hover:bg-zinc-900'
