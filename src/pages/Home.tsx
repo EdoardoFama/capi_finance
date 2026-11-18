@@ -29,6 +29,7 @@ import {
   IconSparkles,
   IconTrash,
   IconWallet,
+  Modal,
   MonthPicker,
   ProgressBar,
   Spinner,
@@ -1676,78 +1677,82 @@ export default function Home() {
       )}
 
       {/* Modal: Adicionar Nova Conta do Usuário */}
-      {isAddUserAccountOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Nova Conta / Benefício</h3>
-            <p className="text-xs text-zinc-400 mt-0.5">Ex: Nubank, Inter, Alelo, VR, Flash...</p>
+      <Modal
+        isOpen={isAddUserAccountOpen}
+        onClose={() => setIsAddUserAccountOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        <h3 className="text-lg font-bold text-white">Nova Conta / Benefício</h3>
+        <p className="text-xs text-zinc-400 mt-0.5">Ex: Nubank, Inter, Alelo, VR, Flash...</p>
 
-            <form onSubmit={handleCreateUserAccount} className="mt-4 space-y-3.5">
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-                  Nome da Conta / Cartão
-                </label>
-                <input
-                  value={newAccName}
-                  onChange={(e) => setNewAccName(e.target.value)}
-                  placeholder="EX: NUBANK, ALELO..."
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-                  Saldo Inicial do Mês (Opcional)
-                </label>
-                <input
-                  placeholder="0,00"
-                  inputMode="decimal"
-                  value={newAccBalance}
-                  onChange={(e) => setNewAccBalance(formatCurrencyInput(e.target.value))}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-                  Cor de Identificação
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="color"
-                    value={newAccColor}
-                    onChange={(e) => setNewAccColor(e.target.value)}
-                    className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
-                  />
-                  <span className="text-xs font-mono font-bold text-zinc-300">{newAccColor}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setIsAddUserAccountOpen(false)}
-                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
-                >
-                  Cancelar
-                </button>
-                <button
-                  disabled={isCreatingAcc}
-                  className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-50"
-                >
-                  {isCreatingAcc ? 'Criando…' : 'Criar Conta'}
-                </button>
-              </div>
-            </form>
+        <form onSubmit={handleCreateUserAccount} className="mt-4 space-y-3.5">
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Nome da Conta / Cartão
+            </label>
+            <input
+              value={newAccName}
+              onChange={(e) => setNewAccName(e.target.value)}
+              placeholder="EX: NUBANK, ALELO..."
+              className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
+              required
+            />
           </div>
-        </div>
-      )}
+
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Saldo Inicial do Mês (Opcional)
+            </label>
+            <input
+              placeholder="0,00"
+              inputMode="decimal"
+              value={newAccBalance}
+              onChange={(e) => setNewAccBalance(formatCurrencyInput(e.target.value))}
+              className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Cor de Identificação
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={newAccColor}
+                onChange={(e) => setNewAccColor(e.target.value)}
+                className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
+              />
+              <span className="text-xs font-mono font-bold text-zinc-300">{newAccColor}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 pt-3">
+            <button
+              type="button"
+              onClick={() => setIsAddUserAccountOpen(false)}
+              className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              Cancelar
+            </button>
+            <button
+              disabled={isCreatingAcc}
+              className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-50"
+            >
+              {isCreatingAcc ? 'Criando…' : 'Criar Conta'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Modal: Editar Conta do Usuário */}
-      {isEditUserAccountOpen && editingUserAccount && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
+      <Modal
+        isOpen={Boolean(isEditUserAccountOpen && editingUserAccount)}
+        onClose={() => setIsEditUserAccountOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        {editingUserAccount && (
+          <div>
             <h3 className="text-lg font-bold text-white">Editar Conta / Benefício</h3>
             <p className="text-xs text-zinc-400 mt-0.5">Altere o nome, cor ou exclua esta conta.</p>
 
@@ -1804,8 +1809,8 @@ export default function Home() {
               </div>
             </form>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* Botão flutuante (desktop) */}
       <Link

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } f
 import { api, type InvestmentAccount, type InvestmentSnapshot, type InvestmentsData, type RedeemResult, type UserAccount } from '../api';
 import { useToast, useConfirm } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL, shiftMonth, todayISO } from '../format';
-import { Card, CollapseButton, CustomSelect, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, PageTitle, Spinner, useCollapsible } from '../components/ui';
+import { Card, CollapseButton, CustomSelect, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, Modal, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
 
 const MONTH_NAMES = [
@@ -798,359 +798,389 @@ export default function Investments() {
       </Card>
 
       {/* Modal: Atualizar Saldo do Mês (100% Automático) */}
-      {isUpdateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-              <div>
-                <h3 className="text-lg font-bold text-white">Atualizar Saldos do Mês</h3>
-                <p className="text-xs text-zinc-400">
-                  Defina o saldo final de cada corretora. O sistema calcula a rentabilidade sozinho!
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => openMonthEditor(shiftMonth(targetMonth, -1))}
-                  className="h-8 w-8 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white flex items-center justify-center text-sm border border-white/[0.08] transition"
-                  title="Mês anterior"
-                >
-                  ‹
-                </button>
-                <input
-                  type="month"
-                  value={targetMonth}
-                  onChange={(e) => openMonthEditor(e.target.value)}
-                  className="bg-zinc-900 text-xs font-bold px-2.5 py-1.5 rounded-xl border border-white/[0.1] text-zinc-200 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => openMonthEditor(shiftMonth(targetMonth, 1))}
-                  className="h-8 w-8 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white flex items-center justify-center text-sm border border-white/[0.08] transition"
-                  title="Próximo mês"
-                >
-                  ›
-                </button>
-              </div>
-            </div>
-
-            <form onSubmit={handleSaveMonth} className="mt-4 space-y-4">
-              <div className="max-h-[60vh] overflow-y-auto space-y-3 pr-1">
-                {data.accounts.map((acc) => {
-                  const prevBal = getPreviousBalance(acc.id, targetMonth);
-                  const rawVal = formBalances[acc.id] ?? '';
-                  const currentCents = rawVal.trim() ? (parseBRL(rawVal) ?? 0) : prevBal;
-                  const autoDiff = currentCents - prevBal;
-                  const pct =
-                    prevBal > 0
-                      ? ((autoDiff / prevBal) * 100).toFixed(1)
-                      : null;
-
-                  return (
-                    <div
-                      key={acc.id}
-                      className="rounded-xl border border-white/[0.07] bg-zinc-900/50 p-3.5 space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full shrink-0"
-                            style={{ backgroundColor: acc.color }}
-                          />
-                          <span className="font-bold text-sm text-zinc-100">{acc.name}</span>
-                        </div>
-                        <span className="text-[11px] text-zinc-500">
-                          Saldo anterior: <strong className="text-zinc-300">{formatBRL(prevBal)}</strong>
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">
-                          Novo Saldo da Carteira (R$)
-                        </label>
-                        <input
-                          placeholder={centsToInput(prevBal) || '0,00'}
-                          inputMode="decimal"
-                          value={formBalances[acc.id] ?? ''}
-                          onChange={(e) =>
-                            setFormBalances((prev) => ({ ...prev, [acc.id]: formatCurrencyInput(e.target.value) }))
-                          }
-                          className="w-full rounded-xl border border-white/[0.08] bg-zinc-950 px-3.5 py-2 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60"
-                        />
-                      </div>
-
-                      {/* Variação calculada automaticamente em tempo real */}
-                      <div className="flex items-center justify-between pt-1 text-xs px-1">
-                        <span className="text-[11px] text-zinc-500">Rentabilidade / Variação calculada:</span>
-                        <span
-                          className={`text-xs font-bold tabular-nums ${
-                            autoDiff > 0
-                              ? 'text-emerald-400'
-                              : autoDiff < 0
-                              ? 'text-rose-400'
-                              : 'text-zinc-500'
-                          }`}
-                        >
-                          {autoDiff > 0 ? `+${formatBRL(autoDiff)}` : formatBRL(autoDiff)}
-                          {pct !== null && ` (${autoDiff > 0 ? '+' : ''}${pct}%)`}
-                          {autoDiff > 0 ? ' ↗' : autoDiff < 0 ? ' ↘' : ''}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="flex items-center gap-2.5 pt-3 border-t border-white/[0.08]">
-                <button
-                  type="button"
-                  onClick={() => setIsUpdateModalOpen(false)}
-                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
-                >
-                  Cancelar
-                </button>
-                <button
-                  disabled={saving}
-                  className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-60"
-                >
-                  {saving ? 'Salvando…' : 'Salvar Alterações'}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={isUpdateModalOpen}
+        onClose={() => setIsUpdateModalOpen(false)}
+        maxWidth="max-w-lg"
+      >
+        <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+          <div>
+            <h3 className="text-lg font-bold text-white">Atualizar Saldos do Mês</h3>
+            <p className="text-xs text-zinc-400">
+              Defina o saldo final de cada corretora. O sistema calcula a rentabilidade sozinho!
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => openMonthEditor(shiftMonth(targetMonth, -1))}
+              className="h-8 w-8 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white flex items-center justify-center text-sm border border-white/[0.08] transition"
+              title="Mês anterior"
+            >
+              ‹
+            </button>
+            <input
+              type="month"
+              value={targetMonth}
+              onChange={(e) => openMonthEditor(e.target.value)}
+              className="bg-zinc-900 text-xs font-bold px-2.5 py-1.5 rounded-xl border border-white/[0.1] text-zinc-200 outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => openMonthEditor(shiftMonth(targetMonth, 1))}
+              className="h-8 w-8 rounded-lg bg-zinc-900 text-zinc-400 hover:text-white flex items-center justify-center text-sm border border-white/[0.08] transition"
+              title="Próximo mês"
+            >
+              ›
+            </button>
           </div>
         </div>
-      )}
+
+        <form onSubmit={handleSaveMonth} className="mt-4 space-y-4">
+          <div className="max-h-[60vh] overflow-y-auto space-y-3 pr-1">
+            {data.accounts.map((acc) => {
+              const prevBal = getPreviousBalance(acc.id, targetMonth);
+              const rawVal = formBalances[acc.id] ?? '';
+              const currentCents = rawVal.trim() ? (parseBRL(rawVal) ?? 0) : prevBal;
+              const autoDiff = currentCents - prevBal;
+              const pct =
+                prevBal > 0
+                  ? ((autoDiff / prevBal) * 100).toFixed(1)
+                  : null;
+
+              return (
+                <div
+                  key={acc.id}
+                  className="rounded-xl border border-white/[0.07] bg-zinc-900/50 p-3.5 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: acc.color }}
+                      />
+                      <span className="font-bold text-sm text-zinc-100">{acc.name}</span>
+                    </div>
+                    <span className="text-[11px] text-zinc-500">
+                      Saldo anterior: <strong className="text-zinc-300">{formatBRL(prevBal)}</strong>
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-zinc-400 block mb-1">
+                      Novo Saldo da Carteira (R$)
+                    </label>
+                    <div className="relative">
+                      <input
+                        placeholder={centsToInput(prevBal) || '0,00'}
+                        inputMode="decimal"
+                        value={formBalances[acc.id] ?? ''}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) =>
+                          setFormBalances((prev) => ({ ...prev, [acc.id]: formatCurrencyInput(e.target.value) }))
+                        }
+                        className="w-full rounded-xl border border-white/[0.08] bg-zinc-950 px-3.5 py-2 text-sm text-white font-bold tabular-nums outline-none focus:border-emerald-500/60 pr-8"
+                      />
+                      {formBalances[acc.id] && (
+                        <button
+                          type="button"
+                          onClick={() => setFormBalances((prev) => ({ ...prev, [acc.id]: '' }))}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs p-1"
+                          title="Limpar campo"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Variação calculada automaticamente em tempo real */}
+                  <div className="flex items-center justify-between pt-1 text-xs px-1">
+                    <span className="text-[11px] text-zinc-500">Rentabilidade / Variação calculada:</span>
+                    <span
+                      className={`text-xs font-bold tabular-nums ${
+                        autoDiff > 0
+                          ? 'text-emerald-400'
+                          : autoDiff < 0
+                          ? 'text-rose-400'
+                          : 'text-zinc-500'
+                      }`}
+                    >
+                      {autoDiff > 0 ? `+${formatBRL(autoDiff)}` : formatBRL(autoDiff)}
+                      {pct !== null && ` (${autoDiff > 0 ? '+' : ''}${pct}%)`}
+                      {autoDiff > 0 ? ' ↗' : autoDiff < 0 ? ' ↘' : ''}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2.5 pt-3 border-t border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => setIsUpdateModalOpen(false)}
+              className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+            >
+              Cancelar
+            </button>
+            <button
+              disabled={saving}
+              className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300 transition disabled:opacity-60"
+            >
+              {saving ? 'Salvando…' : 'Salvar Alterações'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Modal: Saque / Resgate de Investimento */}
-      {isRedeemOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-              <div>
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <IconArrowDownLeft className="h-5 w-5 text-amber-400" /> Saque / Resgate
-                </h3>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Abate da corretora e transfere o dinheiro para a conta selecionada.
-                </p>
-              </div>
+      <Modal
+        isOpen={isRedeemOpen}
+        onClose={() => setIsRedeemOpen(false)}
+        maxWidth="max-w-md"
+      >
+        <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
+          <div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <IconArrowDownLeft className="h-5 w-5 text-amber-400" /> Saque / Resgate
+            </h3>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              Abate da corretora e transfere o dinheiro para a conta selecionada.
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleConfirmRedeem} className="mt-4 space-y-4">
+          {/* Seleção de Carteira de Origem */}
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
+              Corretora de Origem (Saque)
+            </label>
+            <CustomSelect
+              value={String(redeemAccountId ?? '')}
+              onChange={(val) => setRedeemAccountId(Number(val))}
+              options={data.accounts.map((acc) => {
+                const bal = getAccountLatestBalance(acc.id);
+                return {
+                  value: String(acc.id),
+                  label: `${acc.name} — ${formatBRL(bal)}`,
+                  badge: bal <= 0 ? 'Sem saldo' : undefined,
+                };
+              })}
+              searchPlaceholder="Buscar corretora..."
+            />
+            <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
+              <span>Disponível nesta corretora:</span>
+              <span className="font-bold text-zinc-200">{formatBRL(selectedRedeemBal)}</span>
+            </div>
+          </div>
+
+          {/* Seleção de Conta de Destino */}
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
+              Conta de Destino (Receber Saldo)
+            </label>
+            <CustomSelect
+              value={redeemDestAccount}
+              onChange={setRedeemDestAccount}
+              options={
+                userAccounts.length === 0
+                  ? [{ value: 'nubank', label: 'NUBANK (Padrão)' }]
+                  : userAccounts.map((uAcc) => ({
+                      value: uAcc.slug,
+                      label: uAcc.name,
+                    }))
+              }
+              searchPlaceholder="Buscar conta..."
+            />
+          </div>
+
+          {/* Valor do Resgate */}
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
+              Valor a Sacar (R$)
+            </label>
+            <div className="relative">
+              <input
+                placeholder="0,00"
+                inputMode="decimal"
+                value={redeemAmount}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setRedeemAmount(formatCurrencyInput(e.target.value))}
+                className={`w-full rounded-xl border bg-zinc-900 px-3.5 py-2.5 text-base text-white font-black tabular-nums outline-none transition pr-8 ${
+                  isRedeemOverLimit
+                    ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/20'
+                    : 'border-white/[0.08] focus:border-amber-500/60'
+                }`}
+                required
+              />
+              {redeemAmount && (
+                <button
+                  type="button"
+                  onClick={() => setRedeemAmount('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs p-1"
+                  title="Limpar campo"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
-            <form onSubmit={handleConfirmRedeem} className="mt-4 space-y-4">
-              {/* Seleção de Carteira de Origem */}
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Corretora de Origem (Saque)
-                </label>
-                <CustomSelect
-                  value={String(redeemAccountId ?? '')}
-                  onChange={(val) => setRedeemAccountId(Number(val))}
-                  options={data.accounts.map((acc) => {
-                    const bal = getAccountLatestBalance(acc.id);
-                    return {
-                      value: String(acc.id),
-                      label: `${acc.name} — ${formatBRL(bal)}`,
-                      badge: bal <= 0 ? 'Sem saldo' : undefined,
-                    };
-                  })}
-                  searchPlaceholder="Buscar corretora..."
-                />
-                <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
-                  <span>Disponível nesta corretora:</span>
-                  <span className="font-bold text-zinc-200">{formatBRL(selectedRedeemBal)}</span>
-                </div>
-              </div>
-
-              {/* Seleção de Conta de Destino */}
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Conta de Destino (Receber Saldo)
-                </label>
-                <CustomSelect
-                  value={redeemDestAccount}
-                  onChange={setRedeemDestAccount}
-                  options={
-                    userAccounts.length === 0
-                      ? [{ value: 'nubank', label: 'NUBANK (Padrão)' }]
-                      : userAccounts.map((uAcc) => ({
-                          value: uAcc.slug,
-                          label: uAcc.name,
-                        }))
-                  }
-                  searchPlaceholder="Buscar conta..."
-                />
-              </div>
-
-              {/* Valor do Resgate */}
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Valor a Sacar (R$)
-                </label>
-                <input
-                  placeholder="0,00"
-                  inputMode="decimal"
-                  value={redeemAmount}
-                  onChange={(e) => setRedeemAmount(formatCurrencyInput(e.target.value))}
-                  className={`w-full rounded-xl border bg-zinc-900 px-3.5 py-2.5 text-base text-white font-black tabular-nums outline-none transition ${
-                    isRedeemOverLimit
-                      ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/20'
-                      : 'border-white/[0.08] focus:border-amber-500/60'
-                  }`}
-                  required
-                />
-
-                {/* Chips de Atalho de Valor */}
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {[10000, 50000, 100000].map((quickCents) => (
-                    <button
-                      key={quickCents}
-                      type="button"
-                      onClick={() => setRedeemAmount(centsToInput(quickCents))}
-                      className="rounded-lg border border-white/[0.08] bg-zinc-900 px-2.5 py-1 text-[11px] font-bold text-zinc-300 hover:bg-zinc-800 transition"
-                    >
-                      +{formatBRL(quickCents)}
-                    </button>
-                  ))}
-                  {selectedRedeemBal > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setRedeemAmount(centsToInput(selectedRedeemBal))}
-                      className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 transition"
-                    >
-                      Sacar Tudo ({formatBRL(selectedRedeemBal)})
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Data do Resgate */}
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
-                  Data da Operação
-                </label>
-                <input
-                  type="date"
-                  value={redeemDate}
-                  onChange={(e) => setRedeemDate(e.target.value)}
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2 text-sm text-zinc-200 font-bold outline-none focus:border-amber-500/60"
-                  required
-                />
-              </div>
-
-              {/* Card de Pré-visualização da Transação */}
-              {parsedRedeemCents > 0 && (
-                <div
-                  className={`rounded-xl border p-3 text-xs space-y-1.5 ${
-                    isRedeemOverLimit
-                      ? 'border-red-500/30 bg-red-500/10 text-red-200'
-                      : 'border-white/[0.08] bg-zinc-900/60 text-zinc-300'
-                  }`}
+            {/* Chips de Atalho de Valor */}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[10000, 50000, 100000].map((quickCents) => (
+                <button
+                  key={quickCents}
+                  type="button"
+                  onClick={() => setRedeemAmount(centsToInput(quickCents))}
+                  className="rounded-lg border border-white/[0.08] bg-zinc-900 px-2.5 py-1 text-[11px] font-bold text-zinc-300 hover:bg-zinc-800 transition"
                 >
-                  {isRedeemOverLimit ? (
-                    <p className="font-bold text-red-400">
-                      ⚠️ O valor a sacar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível na corretora ({formatBRL(selectedRedeemBal)}).
-                    </p>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <span className="text-zinc-400">Origem ({selectedRedeemAcc?.name}):</span>
-                        <span className="font-bold text-zinc-200">
-                          {formatBRL(selectedRedeemBal)} ➔ {formatBRL(redeemRemainingCents)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-zinc-400">
-                          Destino ({userAccounts.find((a) => a.slug === redeemDestAccount)?.name ?? 'Conta'}):
-                        </span>
-                        <span className="font-bold text-emerald-400">
-                          +{formatBRL(parsedRedeemCents)} no saldo
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-zinc-500 pt-1 border-t border-white/[0.05]">
-                        Será lançada uma Entrada no extrato dessa conta.
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2.5 pt-3 border-t border-white/[0.08]">
+                  +{formatBRL(quickCents)}
+                </button>
+              ))}
+              {selectedRedeemBal > 0 && (
                 <button
                   type="button"
-                  onClick={() => setIsRedeemOpen(false)}
-                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+                  onClick={() => setRedeemAmount(centsToInput(selectedRedeemBal))}
+                  className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 transition"
                 >
-                  Cancelar
+                  Sacar Tudo ({formatBRL(selectedRedeemBal)})
                 </button>
-                <button
-                  disabled={redeeming || parsedRedeemCents <= 0 || isRedeemOverLimit}
-                  className="flex-1 rounded-xl bg-amber-400 py-2.5 text-xs font-extrabold text-black hover:bg-amber-300 transition disabled:opacity-50"
-                >
-                  {redeeming ? 'Processando…' : 'Confirmar Saque'}
-                </button>
-              </div>
-            </form>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+
+          {/* Data do Resgate */}
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1.5">
+              Data da Operação
+            </label>
+            <input
+              type="date"
+              value={redeemDate}
+              onChange={(e) => setRedeemDate(e.target.value)}
+              className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2 text-sm text-zinc-200 font-bold outline-none focus:border-amber-500/60"
+              required
+            />
+          </div>
+
+          {/* Card de Pré-visualização da Transação */}
+          {parsedRedeemCents > 0 && (
+            <div
+              className={`rounded-xl border p-3 text-xs space-y-1.5 ${
+                isRedeemOverLimit
+                  ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                  : 'border-white/[0.08] bg-zinc-900/60 text-zinc-300'
+              }`}
+            >
+              {isRedeemOverLimit ? (
+                <p className="font-bold text-red-400">
+                  ⚠️ O valor a sacar ({formatBRL(parsedRedeemCents)}) é maior que o saldo disponível na corretora ({formatBRL(selectedRedeemBal)}).
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Origem ({selectedRedeemAcc?.name}):</span>
+                    <span className="font-bold text-zinc-200">
+                      {formatBRL(selectedRedeemBal)} ➔ {formatBRL(redeemRemainingCents)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">
+                      Destino ({userAccounts.find((a) => a.slug === redeemDestAccount)?.name ?? 'Conta'}):
+                    </span>
+                    <span className="font-bold text-emerald-400">
+                      +{formatBRL(parsedRedeemCents)} no saldo
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 pt-1 border-t border-white/[0.05]">
+                    Será lançada uma Entrada no extrato dessa conta.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2.5 pt-3 border-t border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => setIsRedeemOpen(false)}
+              className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white transition"
+            >
+              Cancelar
+            </button>
+            <button
+              disabled={redeeming || parsedRedeemCents <= 0 || isRedeemOverLimit}
+              className="flex-1 rounded-xl bg-amber-400 py-2.5 text-xs font-extrabold text-black hover:bg-amber-300 transition disabled:opacity-50"
+            >
+              {redeeming ? 'Processando…' : 'Confirmar Saque'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Modal: Adicionar Nova Corretora */}
-      {isAddAccountOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Nova Corretora / Carteira</h3>
-            <p className="text-xs text-zinc-400 mt-0.5">Ex: XP, BTG, Nubank Caixinha, Inter...</p>
+      <Modal
+        isOpen={isAddAccountOpen}
+        onClose={() => setIsAddAccountOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        <h3 className="text-lg font-bold text-white">Nova Corretora / Carteira</h3>
+        <p className="text-xs text-zinc-400 mt-0.5">Ex: XP, BTG, Nubank Caixinha, Inter...</p>
 
-            <form onSubmit={handleAddAccount} className="mt-4 space-y-3.5">
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-                  Nome da Instituição
-                </label>
-                <input
-                  value={newAccountName}
-                  onChange={(e) => setNewAccountName(e.target.value)}
-                  placeholder="EX: NUBANK RESERVA"
-                  className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-                  Cor de Identificação
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="color"
-                    value={newAccountColor}
-                    onChange={(e) => setNewAccountColor(e.target.value)}
-                    className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
-                  />
-                  <span className="text-xs font-mono font-bold text-zinc-300">{newAccountColor}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setIsAddAccountOpen(false)}
-                  className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
-                >
-                  Cancelar
-                </button>
-                <button className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300">
-                  Criar Corretora
-                </button>
-              </div>
-            </form>
+        <form onSubmit={handleAddAccount} className="mt-4 space-y-3.5">
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Nome da Instituição
+            </label>
+            <input
+              value={newAccountName}
+              onChange={(e) => setNewAccountName(e.target.value)}
+              placeholder="EX: NUBANK RESERVA"
+              className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-sm text-white font-bold outline-none uppercase focus:border-emerald-500/60"
+              required
+            />
           </div>
-        </div>
-      )}
+
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Cor de Identificação
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="color"
+                value={newAccountColor}
+                onChange={(e) => setNewAccountColor(e.target.value)}
+                className="h-10 w-14 rounded-xl border border-white/[0.08] bg-zinc-900 cursor-pointer p-1"
+              />
+              <span className="text-xs font-mono font-bold text-zinc-300">{newAccountColor}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 pt-3">
+            <button
+              type="button"
+              onClick={() => setIsAddAccountOpen(false)}
+              className="flex-1 rounded-xl border border-white/[0.08] bg-zinc-900 py-2.5 text-xs font-bold text-zinc-400 hover:bg-zinc-800 hover:text-white"
+            >
+              Cancelar
+            </button>
+            <button className="flex-1 rounded-xl bg-emerald-400 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300">
+              Criar Corretora
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Modal: Editar Corretora */}
-      {isEditAccountOpen && editingAccount && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
+      <Modal
+        isOpen={Boolean(isEditAccountOpen && editingAccount)}
+        onClose={() => setIsEditAccountOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        {editingAccount && (
+          <div>
             <h3 className="text-lg font-bold text-white">Editar Corretora</h3>
             <p className="text-xs text-zinc-400 mt-0.5">Altere o nome, cor ou remova esta corretora.</p>
 
@@ -1204,8 +1234,8 @@ export default function Investments() {
               </div>
             </form>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   );
 }

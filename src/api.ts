@@ -503,6 +503,7 @@ export const createReminder = (data: {
   category_id?: number | null;
   notify?: boolean | number;
   recurrence?: 'none' | 'monthly';
+  months?: string[];
 }) => api<Reminder>('/reminders', { method: 'POST', body: data });
 
 export const updateReminder = (

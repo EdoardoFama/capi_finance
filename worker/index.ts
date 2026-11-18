@@ -1363,6 +1363,51 @@ app.post('/reminders', async (c) => {
   const notify = data.notify === 0 || data.notify === false ? 0 : 1;
   const recurrence = data.recurrence === 'monthly' ? 'monthly' : 'none';
 
+  // Replicação mensal para múltiplos meses selecionados
+  let targetMonths: string[] = [];
+  if (Array.isArray(data.months) && data.months.length > 0) {
+    targetMonths = data.months.filter((m: any) => typeof m === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(m));
+  } else if (recurrence === 'monthly') {
+    // Se for mensal e não informou lista explícita, replica para os próximos 12 meses
+    const [y, m] = date.split('-').map(Number);
+    for (let i = 0; i < 12; i++) {
+      const curDate = new Date(y, m - 1 + i, 1);
+      const curY = curDate.getFullYear();
+      const curM = String(curDate.getMonth() + 1).padStart(2, '0');
+      targetMonths.push(`${curY}-${curM}`);
+    }
+  }
+
+  if (targetMonths.length > 0) {
+    const [, , dStr] = date.split('-');
+    const dayNum = Number(dStr);
+    let firstCreatedId: number | null = null;
+
+    for (const ym of targetMonths) {
+      const [y, m] = ym.split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate();
+      const actualDay = Math.min(dayNum, lastDay);
+      const rowDate = `${y}-${String(m).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
+
+      const res = await c.env.DB.prepare(
+        `INSERT INTO reminders (user_id, title, date, time, amount_cents, category_id, notify, recurrence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      )
+        .bind(uid, title, rowDate, time, amountCents ?? null, categoryId ?? null, notify, recurrence)
+        .first<{ id: number }>();
+
+      if (!firstCreatedId || rowDate === date) {
+        firstCreatedId = res!.id;
+      }
+    }
+
+    const created = await c.env.DB.prepare(`${REMINDER_SELECT} WHERE r.id = ? AND r.user_id = ?`)
+      .bind(firstCreatedId!, uid)
+      .first();
+
+    return c.json(created, 201);
+  }
+
   const res = await c.env.DB.prepare(
     `INSERT INTO reminders (user_id, title, date, time, amount_cents, category_id, notify, recurrence)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,

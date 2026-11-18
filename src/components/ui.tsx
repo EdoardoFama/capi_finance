@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode, type InputHTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
 import { useMonth } from '../context';
 import { monthLabel, shiftMonth, currentMonth, percent } from '../format';
 
@@ -443,5 +444,53 @@ export function CustomSelect({
         </div>
       )}
     </div>
+  );
+}
+
+// ---------- Modal Base com Portal no Body e Posicionamento Mobile Seguro ----------
+export function Modal({
+  isOpen,
+  onClose,
+  children,
+  maxWidth = 'max-w-lg',
+  className = '',
+}: {
+  isOpen: boolean;
+  onClose?: () => void;
+  children: ReactNode;
+  maxWidth?: string;
+  className?: string;
+}) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onClose) onClose();
+    };
+    document.addEventListener('keydown', handleKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/80 backdrop-blur-sm p-3 sm:p-4 pt-8 sm:pt-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && onClose) onClose();
+      }}
+    >
+      <div
+        className={`w-full ${maxWidth} rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 my-auto sm:my-auto ${className}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>,
+    document.body
   );
 }

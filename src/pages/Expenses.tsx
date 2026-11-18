@@ -21,6 +21,7 @@ import {
   IconPlus,
   IconTrash,
   Input,
+  Modal,
   MonthPicker,
   PageTitle,
   ProgressBar,
@@ -944,58 +945,58 @@ export default function Expenses() {
       )}
 
       {/* Pop-up Modal de Parcelas do Cartão */}
-      {isInstallmentModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Parcelamento no Cartão</h3>
-            <p className="mt-1 text-xs text-zinc-400">
-              {parsedAmount
-                ? `Valor total da compra: ${formatBRL(parsedAmount)}`
-                : 'Selecione em quantas parcelas deseja dividir'}
-            </p>
+      <Modal
+        isOpen={isInstallmentModalOpen}
+        onClose={() => setIsInstallmentModalOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        <h3 className="text-lg font-bold text-white">Parcelamento no Cartão</h3>
+        <p className="mt-1 text-xs text-zinc-400">
+          {parsedAmount
+            ? `Valor total da compra: ${formatBRL(parsedAmount)}`
+            : 'Selecione em quantas parcelas deseja dividir'}
+        </p>
 
-            <div className="mt-4 max-h-64 overflow-y-auto space-y-1.5 pr-1">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24].map((n) => {
-                const perMonth = parsedAmount ? Math.round(parsedAmount / n) : 0;
-                return (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => {
-                      setInstallments(n);
-                      setIsInstallmentModalOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm transition ${
-                      installments === n
-                        ? 'bg-emerald-400 text-black font-bold'
-                        : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+        <div className="mt-4 max-h-64 overflow-y-auto space-y-1.5 pr-1">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 24].map((n) => {
+            const perMonth = parsedAmount ? Math.round(parsedAmount / n) : 0;
+            return (
+              <button
+                key={n}
+                type="button"
+                onClick={() => {
+                  setInstallments(n);
+                  setIsInstallmentModalOpen(false);
+                }}
+                className={`w-full flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm transition ${
+                  installments === n
+                    ? 'bg-emerald-400 text-black font-bold'
+                    : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                }`}
+              >
+                <span>{n === 1 ? '1x à vista na fatura' : `${n}x sem juros`}</span>
+                {parsedAmount > 0 && (
+                  <span
+                    className={`text-xs tabular-nums ${
+                      installments === n ? 'text-black font-semibold' : 'text-zinc-400'
                     }`}
                   >
-                    <span>{n === 1 ? '1x à vista na fatura' : `${n}x sem juros`}</span>
-                    {parsedAmount > 0 && (
-                      <span
-                        className={`text-xs tabular-nums ${
-                          installments === n ? 'text-black font-semibold' : 'text-zinc-400'
-                        }`}
-                      >
-                        {formatBRL(perMonth)} /mês
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsInstallmentModalOpen(false)}
-              className="mt-4 w-full rounded-xl bg-zinc-900 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
-            >
-              Fechar
-            </button>
-          </div>
+                    {formatBRL(perMonth)} /mês
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-      )}
+
+        <button
+          type="button"
+          onClick={() => setIsInstallmentModalOpen(false)}
+          className="mt-4 w-full rounded-xl bg-zinc-900 py-2.5 text-sm font-semibold text-zinc-300 hover:bg-zinc-800"
+        >
+          Fechar
+        </button>
+      </Modal>
 
       {/* =========================================================
           LISTA DE LANÇAMENTOS DO MÊS (SAÍDAS E ENTRADAS)

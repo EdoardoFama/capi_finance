@@ -24,6 +24,7 @@ import {
   IconSearch,
   IconTrash,
   IconTrendingUp,
+  Modal,
   MonthPicker,
   PageTitle,
   Spinner,
@@ -363,31 +364,33 @@ export default function History() {
         map.set(name, { amount: exp.amount_cents, id: exp.category_id });
       }
     }
-    return [...map.entries()].map(([name, data]) => {
-      const isSelected = String(selectedCategory) === String(data.id);
-      return {
-        id: data.id,
-        name,
-        amount_cents: data.amount,
-        isSelected,
-        onClick: () => {
-          if (String(selectedCategory) === String(data.id)) {
-            handleCategorySelect('all');
-          } else {
-            handleCategorySelect(String(data.id));
-            if (!listCollapse.isOpen) {
-              listCollapse.setIsOpen(true);
-            }
-            setTimeout(() => {
-              const el = document.getElementById('extrato-filtros-section');
-              if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return [...map.entries()]
+      .map(([name, data]) => {
+        const isSelected = String(selectedCategory) === String(data.id);
+        return {
+          id: data.id,
+          name,
+          amount_cents: data.amount,
+          isSelected,
+          onClick: () => {
+            if (String(selectedCategory) === String(data.id)) {
+              handleCategorySelect('all');
+            } else {
+              handleCategorySelect(String(data.id));
+              if (!listCollapse.isOpen) {
+                listCollapse.setIsOpen(true);
               }
-            }, 60);
-          }
-        },
-      };
-    });
+              setTimeout(() => {
+                const el = document.getElementById('extrato-filtros-section');
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+              }, 60);
+            }
+          },
+        };
+      })
+      .sort((a, b) => b.amount_cents - a.amount_cents);
   }, [expenses, selectedCategory, listCollapse, handleCategorySelect]);
 
   // Agrupamento por dia (ordenado do mais recente pro mais antigo)
@@ -430,30 +433,30 @@ export default function History() {
       </div>
 
       {/* Segmented Control: Extrato Mensal vs Comparativo Histórico */}
-      <div className="flex items-center gap-1.5 rounded-2xl border border-white/[0.08] bg-zinc-950/70 p-1 backdrop-blur-md">
+      <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/[0.08] bg-zinc-950/70 p-1 backdrop-blur-md">
         <button
           type="button"
           onClick={() => setViewMode('monthly')}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
             viewMode === 'monthly'
-              ? 'bg-zinc-800 text-white shadow'
-              : 'text-zinc-400 hover:text-zinc-200'
+              ? 'bg-zinc-800 text-white shadow border border-white/10'
+              : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
           }`}
         >
-          <IconList className="h-4 w-4" />
-          Extrato Mensal
+          <IconList className="h-4 w-4 shrink-0" />
+          <span className="truncate">Extrato Mensal</span>
         </button>
         <button
           type="button"
           onClick={() => setViewMode('analytics')}
-          className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
             viewMode === 'analytics'
               ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 shadow'
-              : 'text-zinc-400 hover:text-zinc-200'
+              : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
           }`}
         >
-          <IconTrendingUp className="h-4 w-4" />
-          Comparativo Histórico (6 Meses)
+          <IconTrendingUp className="h-4 w-4 shrink-0" />
+          <span className="truncate">Comparativo (6 Meses)</span>
         </button>
       </div>
 
@@ -461,13 +464,15 @@ export default function History() {
         <MonthlyAnalyticsView currentMonth={month} />
       ) : (
         <>
-      {exportOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/[0.1] bg-zinc-950 p-5 shadow-2xl">
-            <h3 className="text-lg font-bold text-white">Exportar Relatório</h3>
-            <p className="mt-1 text-xs text-zinc-400">
-              Inclui ganhos, tetos por categoria, gastos detalhados e investimentos.
-            </p>
+      <Modal
+        isOpen={exportOpen}
+        onClose={() => setExportOpen(false)}
+        maxWidth="max-w-sm"
+      >
+        <h3 className="text-lg font-bold text-white">Exportar Relatório</h3>
+        <p className="mt-1 text-xs text-zinc-400">
+          Inclui ganhos, tetos por categoria, gastos detalhados e investimentos.
+        </p>
 
             <label className="mt-4 mb-1.5 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
               Período de exportação (Item 45)
@@ -561,9 +566,7 @@ export default function History() {
             >
               Cancelar
             </button>
-          </div>
-        </div>
-      )}
+      </Modal>
 
       <MonthPicker />
 

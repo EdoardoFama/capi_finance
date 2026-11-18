@@ -12,6 +12,7 @@ import {
   IconPlus,
   IconSearch,
   IconTrash,
+  Modal,
   MonthPicker,
   PageTitle,
   Spinner,
@@ -215,31 +216,33 @@ export default function CreditCard() {
         map.set(catName, { amount: exp.amount_cents, id: exp.category_id });
       }
     }
-    return [...map.entries()].map(([name, data]) => {
-      const isSelected = String(selectedCategory) === String(data.id);
-      return {
-        id: data.id,
-        name,
-        amount_cents: data.amount,
-        isSelected,
-        onClick: () => {
-          if (String(selectedCategory) === String(data.id)) {
-            setSelectedCategory('all');
-          } else {
-            setSelectedCategory(String(data.id));
-            if (!expensesCollapse.isOpen) {
-              expensesCollapse.setIsOpen(true);
-            }
-            setTimeout(() => {
-              const el = document.getElementById('fatura-lancamentos-section');
-              if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return [...map.entries()]
+      .map(([name, data]) => {
+        const isSelected = String(selectedCategory) === String(data.id);
+        return {
+          id: data.id,
+          name,
+          amount_cents: data.amount,
+          isSelected,
+          onClick: () => {
+            if (String(selectedCategory) === String(data.id)) {
+              setSelectedCategory('all');
+            } else {
+              setSelectedCategory(String(data.id));
+              if (!expensesCollapse.isOpen) {
+                expensesCollapse.setIsOpen(true);
               }
-            }, 60);
-          }
-        },
-      };
-    });
+              setTimeout(() => {
+                const el = document.getElementById('fatura-lancamentos-section');
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+              }, 60);
+            }
+          },
+        };
+      })
+      .sort((a, b) => b.amount_cents - a.amount_cents);
   }, [invoice, selectedCategory, expensesCollapse]);
 
   const grouped = useMemo(() => {
@@ -638,7 +641,9 @@ export default function CreditCard() {
                 </div>
 
                 <div className="space-y-2.5 max-h-40 overflow-y-auto pr-1">
-                  {invoice.by_category.map((cat) => {
+                  {[...invoice.by_category]
+                    .sort((a, b) => b.total_cents - a.total_cents)
+                    .map((cat) => {
                     const pct = invoiceTotal > 0 ? Math.round((cat.total_cents / invoiceTotal) * 100) : 0;
                     return (
                       <div key={cat.category_id} className="space-y-1">
@@ -667,29 +672,31 @@ export default function CreditCard() {
           </div>
 
           {/* Modal de Pagamento de Fatura (Parcial ou Total) */}
-          {showPayModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-              <div className="w-full max-w-lg rounded-2xl border border-white/[0.1] bg-zinc-950 p-6 shadow-2xl">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                      <IconCreditCard className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-white">Pagamento da Fatura</h3>
-                      <p className="text-xs text-zinc-400 capitalize">
-                        Nubank Mastercard • {monthLabel(month)}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowPayModal(false)}
-                    className="text-zinc-400 hover:text-white text-base px-2 py-1 rounded-lg hover:bg-zinc-900 transition"
-                  >
-                    ✕
-                  </button>
+          <Modal
+            isOpen={showPayModal}
+            onClose={() => setShowPayModal(false)}
+            maxWidth="max-w-lg"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  <IconCreditCard className="h-6 w-6" />
                 </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Pagamento da Fatura</h3>
+                  <p className="text-xs text-zinc-400 capitalize">
+                    Nubank Mastercard • {monthLabel(month)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPayModal(false)}
+                className="text-zinc-400 hover:text-white text-base px-2 py-1 rounded-lg hover:bg-zinc-900 transition"
+              >
+                ✕
+              </button>
+            </div>
 
                 {/* Resumo da Fatura */}
                 <div className="mt-4 grid grid-cols-2 gap-2 text-xs rounded-xl border border-white/[0.08] bg-zinc-900/60 p-3.5">
@@ -836,9 +843,7 @@ export default function CreditCard() {
                       : `Confirmar Pagamento (${formatBRL(parseBRL(payInput) ?? remainingAmount)})`}
                   </button>
                 </div>
-              </div>
-            </div>
-          )}
+          </Modal>
 
           {/* Dashboard de Distribuição da Fatura */}
           {invoiceTotal > 0 && (

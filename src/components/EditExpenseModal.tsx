@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { api, type Category, type Expense, type AccountId, type PaymentMethod, ACCOUNT_DEFINITIONS } from '../api';
 import { formatBRL, formatCurrencyInput, parseBRL } from '../format';
 import { useToast } from '../context';
-import { CustomSelect } from './ui';
+import { CustomSelect, Modal } from './ui';
 
 type Props = {
   expense: Expense | null;
@@ -86,9 +86,8 @@ function EditExpenseForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+    <Modal isOpen={true} onClose={onClose} maxWidth="max-w-lg" className="overflow-y-auto max-h-[90vh]">
+      <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
           <div>
             <h3 className="text-lg font-bold text-white">Editar Lançamento</h3>
             {expense.installment_total > 1 && (
@@ -294,8 +293,7 @@ function EditExpenseForm({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

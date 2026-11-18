@@ -46,6 +46,55 @@ type CalendarDay =
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
+function getNext12Months(baseMonth: string): string[] {
+  const [y, m] = baseMonth.split('-').map(Number);
+  const list: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(y, m - 1 + i, 1);
+    const yr = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    list.push(`${yr}-${mo}`);
+  }
+  return list;
+}
+
+function getExpenseHeat(amount: number, maxAmount: number) {
+  if (amount <= 0 || maxAmount <= 0) {
+    return { level: 0, dotClass: '', textColor: 'text-red-400/90', label: '' };
+  }
+  const ratio = amount / maxAmount;
+  if (ratio <= 0.25) {
+    return {
+      level: 1,
+      dotClass: 'h-1.5 w-1.5 bg-emerald-400',
+      textColor: 'text-emerald-400',
+      label: 'Menos gasto',
+    };
+  }
+  if (ratio <= 0.50) {
+    return {
+      level: 2,
+      dotClass: 'h-1.5 w-1.5 bg-amber-400',
+      textColor: 'text-amber-400',
+      label: 'Gasto moderado',
+    };
+  }
+  if (ratio <= 0.75) {
+    return {
+      level: 3,
+      dotClass: 'h-2 w-2 bg-orange-500',
+      textColor: 'text-orange-400',
+      label: 'Gasto elevado',
+    };
+  }
+  return {
+    level: 4,
+    dotClass: 'h-2.5 w-2.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)] ring-1 ring-red-400',
+    textColor: 'text-rose-400 font-extrabold',
+    label: 'Pico de gasto',
+  };
+}
+
 export default function CalendarPage() {
   const { month, setMonth } = useMonth();
   const toast = useToast();
@@ -73,6 +122,7 @@ export default function CalendarPage() {
   const [remCategoryId, setRemCategoryId] = useState<string>('');
   const [remNotify, setRemNotify] = useState(true);
   const [remRecurrence, setRemRecurrence] = useState<'none' | 'monthly'>('none');
+  const [remMonths, setRemMonths] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   // Status de permissão de notificação
@@ -131,6 +181,7 @@ export default function CalendarPage() {
 
   // Abre form para novo lembrete
   function handleOpenNewReminder(dateStr?: string) {
+    const targetDate = dateStr || selectedDate;
     if (dateStr) setSelectedDate(dateStr);
     setEditingReminder(null);
     setRemTitle('');
@@ -139,6 +190,7 @@ export default function CalendarPage() {
     setRemCategoryId('');
     setRemNotify(true);
     setRemRecurrence('none');
+    setRemMonths(getNext12Months(targetDate.slice(0, 7)));
     setIsAddingReminder(true);
   }
 
@@ -151,6 +203,7 @@ export default function CalendarPage() {
     setRemCategoryId(r.category_id ? String(r.category_id) : '');
     setRemNotify(r.notify === 1);
     setRemRecurrence(r.recurrence || 'none');
+    setRemMonths([r.date.slice(0, 7)]);
     setIsAddingReminder(true);
   }
 
@@ -185,8 +238,13 @@ export default function CalendarPage() {
           category_id: catId,
           notify: remNotify ? 1 : 0,
           recurrence: remRecurrence,
+          months: remRecurrence === 'monthly' ? remMonths : undefined,
         });
-        toast('Lembrete agendado com sucesso! ⏰');
+        toast(
+          remRecurrence === 'monthly' && remMonths.length > 1
+            ? `Lembrete criado e replicado para ${remMonths.length} meses! ⏰`
+            : 'Lembrete agendado com sucesso! ⏰'
+        );
       }
 
       setIsAddingReminder(false);
@@ -313,6 +371,16 @@ export default function CalendarPage() {
   const monthTotalExpenses = useMemo(() => {
     return expenses.reduce((acc, e) => acc + e.amount_cents, 0);
   }, [expenses]);
+
+  const maxDailyExpense = useMemo(() => {
+    let max = 0;
+    calendarGrid.forEach((d) => {
+      if (!d.blank && d.expensesTotal > max) {
+        max = d.expensesTotal;
+      }
+    });
+    return max;
+  }, [calendarGrid]);
 
   const monthPendingReminders = useMemo(() => {
     return reminders.filter((r) => !r.is_completed).length;
@@ -634,6 +702,7 @@ export default function CalendarPage() {
                   const hasPendingReminder = item.reminders.some((r) => !r.is_completed);
                   const hasDoneReminder = item.reminders.some((r) => r.is_completed);
                   const hasExpenses = item.expensesTotal > 0;
+                  const heat = getExpenseHeat(item.expensesTotal, maxDailyExpense);
 
                   return (
                     <button
@@ -683,17 +752,23 @@ export default function CalendarPage() {
 
                       {/* Conteúdo do dia (gastos e lembretes visíveis em telas médias/grandes) */}
                       <div className="mt-1 w-full space-y-0.5">
-                        {/* Gasto total do dia */}
+                        {/* Gasto total do dia com indicador térmico no desktop */}
                         {hasExpenses && (
-                          <p className="hidden sm:block truncate text-[10px] font-bold text-red-400/90 tabular-nums">
-                            -{formatBRL(item.expensesTotal)}
-                          </p>
+                          <div className="hidden sm:flex items-center gap-1 truncate">
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${heat.dotClass}`} />
+                            <p className={`truncate text-[10px] font-bold tabular-nums ${heat.textColor}`}>
+                              -{formatBRL(item.expensesTotal)}
+                            </p>
+                          </div>
                         )}
 
-                        {/* Dot de gasto em telas pequenas */}
+                        {/* Dot com mapa de calor em telas pequenas */}
                         {hasExpenses && (
-                          <div className="sm:hidden flex justify-center">
-                            <span className="h-1.5 w-1.5 rounded-full bg-red-400/80" />
+                          <div className="sm:hidden flex justify-center py-0.5">
+                            <span
+                              className={`rounded-full transition-transform ${heat.dotClass}`}
+                              title={`Gasto do dia: ${formatBRL(item.expensesTotal)} (${heat.label})`}
+                            />
                           </div>
                         )}
 
@@ -723,18 +798,31 @@ export default function CalendarPage() {
                 })}
               </div>
 
-              {/* Legenda rápida */}
-              <div className="mt-4 pt-3 border-t border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-400 flex-wrap gap-2">
-                <div className="flex items-center gap-3">
+              {/* Legenda rápida com Mapa de Calor de Gastos */}
+              <div className="mt-4 pt-3 border-t border-white/[0.06] flex items-center justify-between text-[11px] text-zinc-400 flex-wrap gap-2.5">
+                <div className="flex items-center gap-3 flex-wrap">
                   <span className="flex items-center gap-1.5">
                     <span className="h-2 w-2 rounded-full bg-emerald-400" /> Hoje
                   </span>
                   <span className="flex items-center gap-1.5">
                     <span className="h-2 w-2 rounded-full bg-amber-400" /> Lembrete pendente
                   </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-red-400" /> Gasto registrado
-                  </span>
+                  {/* Mapa de Calor */}
+                  <div className="flex items-center gap-2 pl-2 border-l border-white/10">
+                    <span className="text-[10px] text-zinc-500 uppercase font-bold">Gastos:</span>
+                    <span className="flex items-center gap-1 text-[10px]" title="Menos gasto">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Menos
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px]" title="Gasto moderado">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Médio
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px]" title="Gasto elevado">
+                      <span className="h-2 w-2 rounded-full bg-orange-500" /> Alto
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px]" title="Pico de gasto">
+                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.8)]" /> Pico
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -873,7 +961,13 @@ export default function CalendarPage() {
                       </label>
                       <select
                         value={remRecurrence}
-                        onChange={(e) => setRemRecurrence(e.target.value as 'none' | 'monthly')}
+                        onChange={(e) => {
+                          const val = e.target.value as 'none' | 'monthly';
+                          setRemRecurrence(val);
+                          if (val === 'monthly' && remMonths.length === 0) {
+                            setRemMonths(getNext12Months(selectedDate.slice(0, 7)));
+                          }
+                        }}
                         className="w-full rounded-xl border border-white/10 bg-zinc-900 px-2 py-1.5 text-xs text-white focus:border-emerald-500 focus:outline-none"
                       >
                         <option value="none">Não repete</option>
@@ -881,6 +975,66 @@ export default function CalendarPage() {
                       </select>
                     </div>
                   </div>
+
+                  {/* Seletor de Meses para Replicar Lembrete Mensal */}
+                  {remRecurrence === 'monthly' && (
+                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                          <span>📅</span> Replicar nos meses ({remMonths.length} selecionados):
+                        </span>
+                        <div className="flex items-center gap-1 text-[10px]">
+                          <button
+                            type="button"
+                            onClick={() => setRemMonths(getNext12Months(selectedDate.slice(0, 7)))}
+                            className="text-emerald-400 hover:underline px-1 cursor-pointer font-bold"
+                          >
+                            Todos
+                          </button>
+                          <span className="text-zinc-600">•</span>
+                          <button
+                            type="button"
+                            onClick={() => setRemMonths([selectedDate.slice(0, 7)])}
+                            className="text-zinc-400 hover:text-white px-1 cursor-pointer"
+                          >
+                            Só este
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                        {getNext12Months(selectedDate.slice(0, 7)).map((mStr) => {
+                          const isSel = remMonths.includes(mStr);
+                          const [y, m] = mStr.split('-').map(Number);
+                          const shortNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+                          const label = `${shortNames[m - 1]}/${String(y).slice(2)}`;
+                          return (
+                            <button
+                              key={mStr}
+                              type="button"
+                              onClick={() => {
+                                setRemMonths((prev) =>
+                                  prev.includes(mStr)
+                                    ? prev.filter((item) => item !== mStr)
+                                    : [...prev, mStr].sort()
+                                );
+                              }}
+                              className={`rounded-lg py-1.5 text-[11px] font-bold border transition text-center cursor-pointer ${
+                                isSel
+                                  ? 'bg-emerald-500/25 border-emerald-500/50 text-emerald-200 shadow-sm'
+                                  : 'bg-zinc-900 border-white/[0.08] text-zinc-500 hover:text-zinc-300'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-zinc-400">
+                        O lembrete será criado no dia {Number(selectedDate.split('-')[2])} de cada mês selecionado.
+                      </p>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2 pt-1">
                     <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">

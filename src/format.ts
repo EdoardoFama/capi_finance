@@ -11,11 +11,6 @@ export function formatCurrencyInput(raw: string): string {
   if (!raw) return '';
   let s = raw.trim();
 
-  // Se o usuário digitou ponto no final (ex: "1585."), converte para vírgula decimal
-  if (s.endsWith('.')) {
-    s = s.slice(0, -1) + ',';
-  }
-
   // Se tem vírgula, separa a parte inteira e a parte decimal
   if (s.includes(',')) {
     const parts = s.split(',');
@@ -27,18 +22,31 @@ export function formatCurrencyInput(raw: string): string {
       intFormatted = Number(intDigits).toLocaleString('pt-BR');
     }
 
-    return `${intFormatted},${decDigits}`;
+    if (parts.length > 1 && parts[1] === '' && s.endsWith(',')) {
+      return `${intFormatted},`;
+    }
+
+    return decDigits.length > 0 ? `${intFormatted},${decDigits}` : intFormatted;
   }
 
-  // Se colou algo com ponto decimal tipo "1585.50" (mais de 3 dígitos antes do ponto e 1-2 depois)
+  // Se o usuário usou ponto:
   if (s.includes('.')) {
     const parts = s.split('.');
-    if (parts.length === 2 && parts[0].length > 3 && parts[1].length <= 2) {
+
+    // Se tem 1 único ponto e exatamente 1 ou 2 dígitos no final (ex: "29.5" ou "29.50"),
+    // o usuário provavelmente usou teclado sem vírgula com ponto decimal
+    if (parts.length === 2 && parts[1].length > 0 && parts[1].length <= 2 && parts[0].replace(/\D/g, '').length <= 3) {
       const intDigits = parts[0].replace(/\D/g, '');
       const decDigits = parts[1].replace(/\D/g, '').slice(0, 2);
-      const intFormatted = Number(intDigits).toLocaleString('pt-BR');
+      const intFormatted = intDigits ? Number(intDigits).toLocaleString('pt-BR') : '0';
       return `${intFormatted},${decDigits}`;
     }
+
+    // Se tem exatamente 3 dígitos após o ponto (ex: "29.250", "1.000") ou múltiplos pontos:
+    // Trata como separador de milhar!
+    const digits = s.replace(/\D/g, '');
+    if (!digits) return '';
+    return Number(digits).toLocaleString('pt-BR');
   }
 
   // Apenas dígitos inteiros: formata com pontos de milhar automaticamente
