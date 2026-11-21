@@ -33,12 +33,84 @@ export function cleanEstablishmentName(name: string): string {
   // Remove sufixos de cartão, final, modalidade e mensagens do app
   s = s.replace(/\s+(?:para|no|com)\s+(?:o\s+)?(?:cart[aã]o\s+)?(?:virtual\s+)?(?:com\s+)?final\s+\d+.*$/i, '');
   s = s.replace(/\s+(?:com|no)\s+(?:o\s+)?cart[aã]o(?:\s+virtual)?(?:\s+final\s+\d+)?.*$/i, '');
-  s = s.replace(/\s+final\s+\d+.*$/i, '');
+  s = s.replace(/\s+(?:para\s+o\s+cart[aã]o).*$/i, '');
+  s = s.replace(/\s+(?:com\s+final\s+\d+|final\s+\d+).*$/i, '');
   s = s.replace(/\s+no\s+(?:cr[eé]dito|d[eé]bito).*$/i, '');
   s = s.replace(/\s+(?:mas\s+voc[eê]\s+pode|pelo\s+app).*$/i, '');
   s = s.replace(/^[\s\.\-_:,]+|[\s\.\-_:,]+$/g, '');
   s = s.replace(/\s+/g, ' ').trim();
   return s;
+}
+
+export function isMarketingOrPromo(text: string): boolean {
+  const lower = text.toLowerCase();
+  // Ofertas, descontos, promoções, cupons, cashback, resgate
+  if (/\b(?:off|desconto|descontos|cupom|cupons|cashback|promoção|promocao|oferta|ofertas|resgate|resgatar)\b/i.test(lower)) {
+    return true;
+  }
+  // Campanhas de marketing e parcerias
+  if (/\b(?:só cliente|so cliente|cliente nubank|aproveite|experimente|saiba mais|conheça|conheca)\b/i.test(lower)) {
+    return true;
+  }
+  // Empréstimos e simulações de crédito pessoal
+  if (/\b(?:empréstimo|emprestimo|simule|simulação|simulacao|sujeito à análise|sujeito a analise)\b/i.test(lower)) {
+    return true;
+  }
+  // Avisos de limite (aumento, oferta pré-aprovada, etc.)
+  if (/\b(?:aumento de limite|aumentar seu limite|novo limite|limite pré-aprovado|limite pre-aprovado|ajuste seu limite)\b/i.test(lower)) {
+    return true;
+  }
+  // Caixinhas, rendimentos e seguros
+  if (/\b(?:guarde seu dinheiro|caixinha|rendeu|rendimento|seguro vida|seguro celular|seguro auto)\b/i.test(lower)) {
+    return true;
+  }
+  // Produtos e serviços Nubank
+  if (/\b(?:nucel|nu shopping|shopping nubank|shopping do nu|nucoins?|pontos rewards)\b/i.test(lower)) {
+    return true;
+  }
+  // Programas de indicação, sorteios, etc.
+  if (/\b(?:indique amigos|indique um amigo|sorteio|concorra|antecipe suas parcelas|antecipar parcelas)\b/i.test(lower)) {
+    return true;
+  }
+  return false;
+}
+
+export function isInvoiceNotice(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('fatura') &&
+    (lower.includes('fechou') ||
+     lower.includes('fechada') ||
+     lower.includes('fechamento') ||
+     lower.includes('vencimento') ||
+     lower.includes('aberta') ||
+     lower.includes('paga') ||
+     lower.includes('pagamento'))
+  );
+}
+
+export function isDeniedOrCanceled(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('negada') ||
+    lower.includes('negado') ||
+    lower.includes('recusada') ||
+    lower.includes('recusado') ||
+    lower.includes('não autorizada') ||
+    lower.includes('nao autorizada') ||
+    lower.includes('não autorizado') ||
+    lower.includes('nao autorizado') ||
+    lower.includes('limite insuficiente') ||
+    lower.includes('não aprovada') ||
+    lower.includes('nao aprovada') ||
+    lower.includes('bloqueada') ||
+    lower.includes('bloqueado') ||
+    lower.includes('cancelada') ||
+    lower.includes('cancelado') ||
+    lower.includes('não concluída') ||
+    lower.includes('nao concluida') ||
+    lower.includes('tentativa de compra')
+  );
 }
 
 export function parseNubankNotification(titleInput = '', textInput = ''): ParsedNubankEvent {
@@ -53,7 +125,66 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     fullText.match(/(\d+,\d{2})/i);
   const amount_cents = amountMatch ? parseBrlCents(amountMatch[1]) : 0;
 
-  // 1.1 Detectar Estorno / Reembolso / Devolução (Item 02)
+  // 1.1 Filtrar e ignorar compras negadas, recusadas, canceladas ou bloqueadas
+  if (isDeniedOrCanceled(fullText)) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Compra Negada/Recusada',
+      description: 'Notificação de compra negada, não autorizada ou cancelada (ignorada)',
+      payment_method: 'credit',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.2 Filtrar e ignorar avisos de fatura (fechamento, vencimento ou pagamento para não duplicar despesas)
+  if (isInvoiceNotice(fullText)) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Aviso de Fatura',
+      description: 'Notificação de fatura Nubank (ignorada para evitar duplicidade ou falso lançamento)',
+      payment_method: 'credit',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.3 Filtrar e ignorar notificações promocionais, ofertas, marketing, empréstimos e produtos
+  if (isMarketingOrPromo(fullText)) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Notificação Promocional/Marketing',
+      description: 'Notificação de oferta, marketing ou produto Nubank (ignorada)',
+      payment_method: 'debit',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.4 Detectar Transferência entre Contas Próprias / Mesma Titularidade (Item 06)
+  const isSelfTransfer =
+    lower.includes('mesma titularidade') ||
+    lower.includes('entre suas contas') ||
+    lower.includes('conta própria') ||
+    lower.includes('conta propria') ||
+    (lower.includes('edoardo') && (lower.includes('transferiu') || lower.includes('pix enviado')));
+
+  if (isSelfTransfer) {
+    return {
+      type: 'ignore',
+      amount_cents,
+      title: 'Transferência Entre Contas Próprias',
+      description: 'Transferência interna entre contas da mesma titularidade (ignorada para não duplicar saldo)',
+      payment_method: 'pix',
+      installments: 1,
+      raw_text: fullText,
+    };
+  }
+
+  // 1.5 Detectar Estorno / Reembolso / Devolução (Item 02)
   const isRefund =
     lower.includes('estorno') ||
     lower.includes('estornada') ||
@@ -84,65 +215,20 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     };
   }
 
-  // 1.2 Detectar Transferência entre Contas Próprias / Mesma Titularidade (Item 06)
-  const isSelfTransfer =
-    lower.includes('mesma titularidade') ||
-    lower.includes('entre suas contas') ||
-    lower.includes('conta própria') ||
-    lower.includes('conta propria') ||
-    (lower.includes('edoardo') && (lower.includes('transferiu') || lower.includes('pix enviado')));
-
-  if (isSelfTransfer) {
-    return {
-      type: 'ignore',
-      amount_cents,
-      title: 'Transferência Entre Contas Próprias',
-      description: 'Transferência interna entre contas da mesma titularidade (ignorada para não duplicar saldo)',
-      payment_method: 'pix',
-      installments: 1,
-      raw_text: fullText,
-    };
-  }
-
-  // 1.3 Filtrar e ignorar compras negadas, recusadas, canceladas ou bloqueadas
-  const isDenied =
-    lower.includes('negada') ||
-    lower.includes('negado') ||
-    lower.includes('recusada') ||
-    lower.includes('recusado') ||
-    lower.includes('não autorizada') ||
-    lower.includes('nao autorizada') ||
-    lower.includes('não autorizado') ||
-    lower.includes('nao autorizado') ||
-    lower.includes('limite insuficiente') ||
-    lower.includes('não aprovada') ||
-    lower.includes('nao aprovada') ||
-    lower.includes('bloqueada') ||
-    lower.includes('bloqueado') ||
-    lower.includes('cancelada') ||
-    lower.includes('cancelado');
-
-  if (isDenied) {
-    return {
-      type: 'ignore',
-      amount_cents,
-      title: 'Compra Negada/Recusada',
-      description: 'Notificação de compra negada ou não autorizada (ignorada)',
-      payment_method: 'credit',
-      installments: 1,
-      raw_text: fullText,
-    };
-  }
-
   // 2. Se for recebimento (Inflow)
   const isInflow =
     lower.includes('recebeu') ||
     lower.includes('recebido') ||
+    lower.includes('recebemos sua transferência') ||
+    lower.includes('recebemos sua transferencia') ||
     lower.includes('te enviou') ||
     lower.includes('transferência recebida') ||
+    lower.includes('transferencia recebida') ||
     lower.includes('pix recebido') ||
     lower.includes('crédito em conta') ||
+    lower.includes('credito em conta') ||
     lower.includes('enviou um pix pra você') ||
+    lower.includes('enviou um pix pra voce') ||
     lower.includes('fez um pix') ||
     lower.includes('mandou um pix');
 
@@ -168,26 +254,17 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     };
   }
 
-  // 3. Pagamento de fatura (opcionalmente ignorar ou registrar)
-  if (lower.includes('fatura') && (lower.includes('paga') || lower.includes('pagamento'))) {
-    return {
-      type: 'ignore', // Evita duplicar com as despesas já lançadas no cartão
-      amount_cents,
-      title: 'Pagamento de Fatura',
-      description: 'Pagamento de fatura Nubank (ignorado para evitar duplicidade de lançamentos do cartão)',
-      payment_method: 'debit',
-      installments: 1,
-      raw_text: fullText,
-    };
-  }
-
-  // 4. Pix enviado
+  // 3. Pix enviado
   const isPixSent =
     lower.includes('você transferiu') ||
+    lower.includes('voce transferiu') ||
     lower.includes('transferência enviada') ||
+    lower.includes('transferencia enviada') ||
     lower.includes('pix enviado') ||
     lower.includes('você enviou um pix') ||
-    lower.includes('transferência realizada');
+    lower.includes('voce enviou um pix') ||
+    lower.includes('transferência realizada') ||
+    lower.includes('transferencia realizada');
 
   if (isPixSent && amount_cents > 0) {
     let recipient = 'Destinatário Pix';
@@ -207,12 +284,14 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     };
   }
 
-  // 5. Compra aprovada no cartão (Crédito ou Débito)
+  // 4. Compra aprovada no cartão (Crédito ou Débito)
   const isCardPurchase =
-    lower.includes('compra') ||
-    lower.includes('aprovada') ||
+    (lower.includes('compra') && (lower.includes('aprovada') || lower.includes('crédito') || lower.includes('credito') || lower.includes('débito') || lower.includes('debito') || lower.includes('no valor') || lower.includes('no cartão') || lower.includes('no cartao'))) ||
+    lower.includes('compra aprovada') ||
+    lower.includes('compra no crédito aprovada') ||
+    lower.includes('compra no débito aprovada') ||
     lower.includes('você pagou') ||
-    lower.includes('cartão');
+    lower.includes('voce pagou');
 
   if (isCardPurchase && amount_cents > 0) {
     const isDebit = lower.includes('débito') || lower.includes('debito');
@@ -229,7 +308,8 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     // Extrair estabelecimento
     let establishment = 'Compra Nubank';
     const estabMatch =
-      fullText.match(/aprovada\s+(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:no\s+valor|com\s+o|para\s+o|\.|$))/i) ||
+      fullText.match(/aprovada\s+(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:no\s+valor|com\s+o|para\s+o|no\s+cart[aã]o|\.|$))/i) ||
+      fullText.match(/compra\s+de\s+r\$\s*[\d\.,]+\s+(?:aprovada\s+)?(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s*(?:no\s+valor|para\s+o|com\s+o|no\s+cart[aã]o|\.|$))/i) ||
       fullText.match(/(?:em|no|na)\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+?)(?:\s+(?:com|para)\s+o\s+cartão|\.|$)/i) ||
       fullText.match(/estabelecimento\s+([A-Za-zÀ-ÖØ-öø-ÿ0-9\s\.\*\-_]+)/i);
 
@@ -251,7 +331,7 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     };
   }
 
-  // 6. Pagamento de boleto
+  // 5. Pagamento de boleto
   if (lower.includes('boleto') && amount_cents > 0) {
     return {
       type: 'expense',
@@ -265,26 +345,13 @@ export function parseNubankNotification(titleInput = '', textInput = ''): Parsed
     };
   }
 
-  // Se não foi possível identificar padrão claro com valor
-  if (amount_cents > 0) {
-    const fallbackTitle = titleInput ? cleanEstablishmentName(titleInput) : 'Lançamento Nubank';
-    return {
-      type: 'expense',
-      amount_cents,
-      title: (fallbackTitle || 'Lançamento Nubank').slice(0, 120),
-      description: fullText.slice(0, 200),
-      payment_method: 'debit',
-      installments: 1,
-      category_hint: resolveCategoryHint(fallbackTitle || 'OUTROS'),
-      raw_text: fullText,
-    };
-  }
-
+  // 6. Mensagens não reconhecidas como transação financeira válida -> IGNORAR
+  // (Evita que mensagens com números, ofertas como "R$ 500 OFF", propagandas ou avisos virem despesas)
   return {
     type: 'ignore',
-    amount_cents: 0,
-    title: '',
-    description: '',
+    amount_cents,
+    title: titleInput ? cleanEstablishmentName(titleInput) : '',
+    description: 'Notificação não reconhecida como transação financeira válida (ignorada)',
     payment_method: 'debit',
     installments: 1,
     raw_text: fullText,
