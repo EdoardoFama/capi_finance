@@ -71,40 +71,71 @@ export const IconEyeOff = (p: { className?: string }) => (
   <Svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></Svg>
 );
 
-// ---------- Seletor de mês ----------
-export function MonthPicker() {
+// ---------- Seletor de mês com Calendário Direto ----------
+export function MonthPicker({ className = '' }: { className?: string }) {
   const { month, setMonth } = useMonth();
   const isCurrent = month === currentMonth();
+  const inputRef = useRef<HTMLInputElement>(null);
+
   return (
-    <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-1.5 shadow-lg shadow-black/40 backdrop-blur-md">
+    <div className={`flex items-center justify-between gap-1.5 sm:gap-2 rounded-2xl border border-white/[0.08] bg-zinc-950/90 p-1.5 shadow-lg shadow-black/40 backdrop-blur-md ${className}`}>
       <button
+        type="button"
         onClick={() => setMonth(shiftMonth(month, -1))}
-        className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition hover:bg-zinc-900 hover:text-white active:scale-95"
+        className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition hover:bg-zinc-900 hover:text-white active:scale-95 shrink-0"
         aria-label="Mês anterior"
+        title="Mês anterior"
       >
         <IconChevron dir="left" className="h-5 w-5" />
       </button>
 
-      <button
-        onClick={() => setMonth(currentMonth())}
-        className="group flex flex-1 items-center justify-center gap-2 py-1 text-center"
-        title="Voltar para o mês atual"
-      >
-        <IconCalendar className="h-4 w-4 text-emerald-400/80 transition group-hover:scale-110" />
-        <span className="text-sm font-bold tracking-tight text-zinc-100 capitalize">
-          {monthLabel(month)}
-        </span>
-        {!isCurrent && (
-          <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25">
-            Ir p/ atual
+      {/* Seletor central direto com calendário de mês e ano */}
+      <div className="relative group flex flex-1 items-center justify-center gap-2 py-1 px-2.5 rounded-xl hover:bg-zinc-900/60 transition cursor-pointer select-none">
+        {/* Input type="month" sobreposto para acionar o calendário nativo (mês/ano) em 1 clique */}
+        <input
+          ref={inputRef}
+          type="month"
+          value={month}
+          onChange={(e) => {
+            if (e.target.value) setMonth(e.target.value);
+          }}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+          title="Clique para escolher mês e ano diretamente no calendário"
+          aria-label="Escolher mês e ano no calendário"
+        />
+
+        <div className="flex items-center gap-2 pointer-events-none">
+          <IconCalendar className="h-4 w-4 text-emerald-400 group-hover:scale-110 transition shrink-0" />
+          <span className="text-sm font-bold tracking-tight text-zinc-100 capitalize">
+            {monthLabel(month)}
           </span>
+          <span className="text-[10px] text-zinc-500 font-medium hidden sm:inline-block">
+            📅
+          </span>
+        </div>
+
+        {!isCurrent && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setMonth(currentMonth());
+            }}
+            className="relative z-20 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-500/25 active:scale-95 shrink-0 ml-1"
+            title="Voltar para o mês atual"
+          >
+            Ir p/ atual
+          </button>
         )}
-      </button>
+      </div>
 
       <button
+        type="button"
         onClick={() => setMonth(shiftMonth(month, 1))}
-        className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition hover:bg-zinc-900 hover:text-white active:scale-95"
+        className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition hover:bg-zinc-900 hover:text-white active:scale-95 shrink-0"
         aria-label="Próximo mês"
+        title="Próximo mês"
       >
         <IconChevron dir="right" className="h-5 w-5" />
       </button>

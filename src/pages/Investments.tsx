@@ -180,8 +180,8 @@ export default function Investments() {
       if (snap) {
         balances[acc.id] = centsToInput(snap.balance_cents);
       } else {
-        // Pré-preenche com o saldo anterior para não zerar acidentalmente contas não editadas
-        balances[acc.id] = prevBal > 0 ? centsToInput(prevBal) : '';
+        // Se ainda não há snapshot para o mês, deixa em branco para facilitar a digitação direta do novo valor
+        balances[acc.id] = '';
       }
     });
 
@@ -955,7 +955,15 @@ export default function Investments() {
                       <span className="font-bold text-sm text-zinc-100">{acc.name}</span>
                     </div>
                     <span className="text-[11px] text-zinc-500">
-                      Saldo anterior: <strong className="text-zinc-300">{formatBRL(prevBal)}</strong>
+                      Saldo anterior:{' '}
+                      <button
+                        type="button"
+                        onClick={() => setFormBalances((prev) => ({ ...prev, [acc.id]: centsToInput(prevBal) }))}
+                        className="text-zinc-300 font-bold hover:text-emerald-400 hover:underline transition"
+                        title="Clique para preencher com o saldo anterior"
+                      >
+                        {formatBRL(prevBal)}
+                      </button>
                     </span>
                   </div>
 
@@ -968,7 +976,10 @@ export default function Investments() {
                         placeholder={centsToInput(prevBal) || '0,00'}
                         inputMode="decimal"
                         value={formBalances[acc.id] ?? ''}
-                        onFocus={(e) => e.target.select()}
+                        onFocus={(e) => {
+                          const target = e.target;
+                          setTimeout(() => target.select(), 50);
+                        }}
                         onChange={(e) =>
                           setFormBalances((prev) => ({ ...prev, [acc.id]: formatCurrencyInput(e.target.value) }))
                         }
@@ -978,7 +989,7 @@ export default function Investments() {
                         <button
                           type="button"
                           onClick={() => setFormBalances((prev) => ({ ...prev, [acc.id]: '' }))}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs p-1"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-md text-xs w-5 h-5 flex items-center justify-center transition"
                           title="Limpar campo"
                         >
                           ✕

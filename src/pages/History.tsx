@@ -12,7 +12,7 @@ import {
   type UserAccount,
 } from '../api';
 import { useMonth, useToast, useConfirm, useConfirmChoice, useViewMode } from '../context';
-import { dayLabel, formatBRL, monthLabel, parseBRL } from '../format';
+import { dayLabel, formatBRL, monthLabel, parseBRL, todayISO } from '../format';
 import {
   Card,
   CollapseButton,
@@ -36,7 +36,7 @@ import DistributionChart from '../components/DistributionChart';
 import MonthlyAnalyticsView from '../components/MonthlyAnalyticsView';
 
 export default function History() {
-  const { month } = useMonth();
+  const { month, setMonth } = useMonth();
   const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
@@ -108,7 +108,23 @@ export default function History() {
   const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'inflow'>('all');
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'credit' | 'debit_pix'>('all');
   const [search, setSearch] = useState<string>(searchParams.get('busca') || '');
+  const [selectedDate, setSelectedDate] = useState<string>('');
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+
+  // Sincroniza mês caso usuário selecione data de outro mês
+  function handleDateChange(newDate: string) {
+    setSelectedDate(newDate);
+    if (newDate && newDate.slice(0, 7) !== month) {
+      setMonth(newDate.slice(0, 7));
+    }
+  }
+
+  // Limpa filtro de dia caso o usuário navegue para outro mês via seletor
+  useEffect(() => {
+    if (selectedDate && selectedDate.slice(0, 7) !== month) {
+      setSelectedDate('');
+    }
+  }, [month, selectedDate]);
 
   // Ações em Lote (Itens 42 e 43)
   const [batchMode, setBatchMode] = useState(false);
@@ -313,7 +329,9 @@ export default function History() {
               item.category_name.toLowerCase().includes(q) ||
               (item.amount_cents / 100).toFixed(2).replace('.', ',').includes(q));
 
-        if (matchesCategory && matchesAccount && matchesPayment && matchesSearch) {
+        const matchesDate = !selectedDate || item.spent_on === selectedDate;
+
+        if (matchesCategory && matchesAccount && matchesPayment && matchesSearch && matchesDate) {
           result.push({ kind: 'expense', data: item, date: item.spent_on, id: `exp_${item.id}` });
         }
       });
@@ -330,15 +348,16 @@ export default function History() {
           (valOperator && valTargetCents !== null
             ? checkValueMatch(item.amount_cents)
             : (item.description && item.description.toLowerCase().includes(q)));
+        const matchesDate = !selectedDate || item.received_on === selectedDate;
 
-        if (matchesCategory && matchesAccount && matchesSearch) {
+        if (matchesCategory && matchesAccount && matchesSearch && matchesDate) {
           result.push({ kind: 'inflow', data: item, date: item.received_on, id: `inf_${item.id}` });
         }
       });
     }
 
     return result;
-  }, [expenses, inflows, typeFilter, paymentFilter, selectedCategory, selectedAccount, search]);
+  }, [expenses, inflows, typeFilter, paymentFilter, selectedCategory, selectedAccount, search, selectedDate]);
 
   const totalFilteredExpenses = useMemo(() => {
     return filteredItems
@@ -574,6 +593,82 @@ export default function History() {
       </Modal>
 
       <MonthPicker />
+
+      {/* Barra de Tempo de Referência / Filtro de Data e Dia */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/[0.08] bg-zinc-950/80 p-2 shadow-sm text-xs">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+          <span className="text-[11px] font-bold text-zinc-400 pl-1 shrink-0">📅 Período:</span>
+          <button
+            type="button"
+            onClick={() => setSelectedDate('')}
+            className={`rounded-xl px-2.5 py-1 text-xs font-bold transition shrink-0 ${
+              !selectedDate
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border border-white/[0.06]'
+            }`}
+          >
+            Mês Inteiro
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDateChange(todayISO())}
+            className={`rounded-xl px-2.5 py-1 text-xs font-bold transition shrink-0 ${
+              selectedDate === todayISO()
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border border-white/[0.06]'
+            }`}
+          >
+            Hoje
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const yest = new Date();
+              yest.setDate(yest.getDate() - 1);
+              const pad = (n: number) => String(n).padStart(2, '0');
+              const yestISO = `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
+              handleDateChange(yestISO);
+            }}
+            className={`rounded-xl px-2.5 py-1 text-xs font-bold transition shrink-0 ${
+              (() => {
+                const yest = new Date();
+                yest.setDate(yest.getDate() - 1);
+                const pad = (n: number) => String(n).padStart(2, '0');
+                return selectedDate === `${yest.getFullYear()}-${pad(yest.getMonth() + 1)}-${pad(yest.getDate())}`;
+              })()
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border border-white/[0.06]'
+            }`}
+          >
+            Ontem
+          </button>
+        </div>
+
+        {/* Escolher Dia Específico via Datepicker */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <label className="relative flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-zinc-900 px-2.5 py-1 text-xs font-bold text-zinc-300 hover:border-emerald-500/40 hover:text-white transition cursor-pointer">
+            <span>{selectedDate ? `Dia: ${selectedDate.slice(8, 10)}/${selectedDate.slice(5, 7)}` : 'Escolher dia'}</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => handleDateChange(e.target.value)}
+              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+              title="Filtrar por dia específico no calendário"
+            />
+            <span className="text-[11px] text-zinc-400">🗓️</span>
+          </label>
+          {selectedDate && (
+            <button
+              type="button"
+              onClick={() => setSelectedDate('')}
+              className="rounded-lg bg-zinc-900 border border-white/[0.08] px-2 py-1 text-[11px] font-bold text-zinc-400 hover:text-rose-400 transition"
+              title="Limpar filtro de dia"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Alerta de Categoria Ativa (quando veio pelo clique na Home) */}
       {activeCategoryObj && (
@@ -872,7 +967,7 @@ export default function History() {
       ) : filteredItems.length === 0 ? (
         <Card className="text-center py-12 text-zinc-500">
           <p className="text-sm font-medium">Nenhum lançamento encontrado para os filtros selecionados.</p>
-          {(search || selectedCategory !== 'all' || selectedAccount !== 'all' || typeFilter !== 'all' || paymentFilter !== 'all') && (
+          {(search || selectedCategory !== 'all' || selectedAccount !== 'all' || typeFilter !== 'all' || paymentFilter !== 'all' || selectedDate) && (
             <button
               onClick={() => {
                 setSearch('');
@@ -880,6 +975,7 @@ export default function History() {
                 setSelectedAccount('all');
                 setTypeFilter('all');
                 setPaymentFilter('all');
+                setSelectedDate('');
               }}
               className="mt-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/25 transition"
             >

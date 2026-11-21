@@ -29,24 +29,15 @@ export function formatCurrencyInput(raw: string): string {
     return decDigits.length > 0 ? `${intFormatted},${decDigits}` : intFormatted;
   }
 
-  // Se o usuário usou ponto:
+  // Se colou formato americano com ponto decimal (ex: "1585.50" com mais de 3 dígitos antes do ponto e 1-2 decimais)
   if (s.includes('.')) {
     const parts = s.split('.');
-
-    // Se tem 1 único ponto e exatamente 1 ou 2 dígitos no final (ex: "29.5" ou "29.50"),
-    // o usuário provavelmente usou teclado sem vírgula com ponto decimal
-    if (parts.length === 2 && parts[1].length > 0 && parts[1].length <= 2 && parts[0].replace(/\D/g, '').length <= 3) {
+    if (parts.length === 2 && parts[1].length > 0 && parts[1].length <= 2 && parts[0].replace(/\D/g, '').length > 3) {
       const intDigits = parts[0].replace(/\D/g, '');
       const decDigits = parts[1].replace(/\D/g, '').slice(0, 2);
       const intFormatted = intDigits ? Number(intDigits).toLocaleString('pt-BR') : '0';
-      return `${intFormatted},${decDigits}`;
+      return decDigits.length > 0 ? `${intFormatted},${decDigits}` : intFormatted;
     }
-
-    // Se tem exatamente 3 dígitos após o ponto (ex: "29.250", "1.000") ou múltiplos pontos:
-    // Trata como separador de milhar!
-    const digits = s.replace(/\D/g, '');
-    if (!digits) return '';
-    return Number(digits).toLocaleString('pt-BR');
   }
 
   // Apenas dígitos inteiros: formata com pontos de milhar automaticamente

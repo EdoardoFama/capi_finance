@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, Link, useLocation } from 'react-router';
 import { useAuth, useConfirm, usePrivacy, useToast, useViewMode } from '../context';
 import {
@@ -175,7 +175,7 @@ export default function Layout() {
     } catch {}
   }
 
-  function handlePinDigit(digit: string) {
+  const handlePinDigit = useCallback((digit: string) => {
     if (pinInput.length >= 8) return;
     const next = pinInput + digit;
     setPinInput(next);
@@ -192,7 +192,32 @@ export default function Layout() {
       setPinError(true);
       setTimeout(() => setPinInput(''), 450);
     }
-  }
+  }, [pinInput, userPin]);
+
+  // Digitar PIN pelo teclado físico do computador
+  useEffect(() => {
+    if (!isLocked) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        handlePinDigit(e.key);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        setPinInput((p) => p.slice(0, -1));
+        setPinError(false);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setPinInput('');
+        setPinError(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLocked, handlePinDigit]);
 
   // Item 80: Desbloqueio Biométrico (WebAuthn / Passkey / Biometria do Dispositivo)
   async function handleBiometricUnlock() {
@@ -347,6 +372,10 @@ export default function Layout() {
                 ⌫ Apagar
               </button>
             </div>
+
+            <p className="text-[11px] text-zinc-500 hidden sm:block">
+              ⌨️ Você também pode digitar os números pelo teclado do computador
+            </p>
           </div>
         </div>
       )}
