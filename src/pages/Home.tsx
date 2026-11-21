@@ -15,7 +15,7 @@ import {
   ACCOUNT_DEFINITIONS,
 } from '../api';
 import { notifyCeilingAlerts } from '../notifications';
-import { useMonth, useToast, useConfirm } from '../context';
+import { useMonth, useToast, useConfirm, useViewMode } from '../context';
 import { formatBRL, formatCurrencyInput, parseBRL, percent, currentMonth, todayISO } from '../format';
 import {
   Card,
@@ -208,6 +208,7 @@ function AccountCard({
 
 export default function Home() {
   const { month } = useMonth();
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const [data, setData] = useState<Dashboard | null>(null);
@@ -529,7 +530,219 @@ export default function Home() {
       )}
       {!data && !error && <Spinner />}
 
-      {data && metrics && (
+      {data && metrics && isSimple && (
+        <div className="space-y-6">
+          {/* RESUMO SIMPLES E GRANDE */}
+          <div className="rounded-3xl border border-emerald-500/30 bg-gradient-to-br from-zinc-900 via-zinc-950 to-black p-5 sm:p-7 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-3 py-1 text-xs font-extrabold text-emerald-300">
+                🌿 Resumo Fácil do Mês
+              </span>
+              <span className="text-xs font-bold text-zinc-400">
+                {totalPct}% usado
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-white/10 bg-zinc-900/70 p-4 sm:p-5">
+                <p className="text-xs sm:text-sm font-bold text-zinc-300">
+                  Quanto já gastei neste mês:
+                </p>
+                <p className="mt-1 text-3xl sm:text-4xl font-black text-white tabular-nums">
+                  {formatBRL(data.total_spent_cents)}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/25 p-4 sm:p-5">
+                <p className="text-xs sm:text-sm font-bold text-emerald-300">
+                  Quanto ainda posso gastar:
+                </p>
+                <p className="mt-1 text-3xl sm:text-4xl font-black text-emerald-400 tabular-nums">
+                  {formatBRL(metrics.totalAvailableToSpend)}
+                </p>
+              </div>
+            </div>
+
+            <ProgressBar
+              spent={data.total_spent_cents}
+              budget={data.total_income_cents || data.total_budget_cents}
+              className="h-3.5"
+            />
+
+            {/* Botões Grandes de Ação Rápida */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <Link
+                to="/lancar"
+                className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-400 py-3.5 px-4 text-sm font-black text-black shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-300 active:scale-[0.99]"
+              >
+                <IconPlus className="h-5 w-5 stroke-[2.5]" />
+                <span>Anotar um Gasto</span>
+              </Link>
+              <Link
+                to="/cartao"
+                className="flex items-center justify-center gap-2 rounded-2xl border border-purple-500/35 bg-purple-500/15 py-3.5 px-4 text-sm font-bold text-purple-200 transition hover:bg-purple-500/25"
+              >
+                <IconCreditCard className="h-5 w-5 text-purple-300" />
+                <span>Ver Cartão</span>
+              </Link>
+              <Link
+                to="/extrato"
+                className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-zinc-900 py-3.5 px-4 text-sm font-bold text-zinc-100 transition hover:bg-zinc-800"
+              >
+                <IconList className="h-5 w-5 text-zinc-300" />
+                <span>Ver Tudo que Gastei</span>
+              </Link>
+            </div>
+          </div>
+
+          {/* MINHAS CONTAS E SALDOS */}
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-extrabold text-white">Minhas Contas e Saldos</h2>
+                <p className="text-xs text-zinc-400">
+                  Veja quanto dinheiro tem disponível em cada conta ou cartão
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddUserAccountOpen(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3.5 py-2 text-xs font-extrabold text-emerald-300 hover:bg-emerald-500/25 transition"
+              >
+                <IconPlus className="h-4 w-4" /> Adicionar Conta
+              </button>
+            </div>
+
+            {data.accounts.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/10 bg-zinc-950/60 p-6 text-center">
+                <p className="text-sm font-bold text-zinc-200">Nenhuma conta cadastrada ainda</p>
+                <button
+                  type="button"
+                  onClick={() => setIsAddUserAccountOpen(true)}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-4 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300"
+                >
+                  <IconPlus className="h-4 w-4" /> Cadastrar Minha Conta
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {data.accounts.map((acc) => (
+                  <AccountCard
+                    key={acc.account_id}
+                    account={acc}
+                    month={month}
+                    onUpdate={handleAccountInitialUpdate}
+                    onEdit={() => {
+                      setEditingUserAccount(acc);
+                      setEditAccName(acc.name);
+                      setEditAccColor(acc.color || '#10b981');
+                      setIsEditUserAccountOpen(true);
+                    }}
+                    onDelete={() => handleDeleteUserAccount(acc)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* LEMBRETES DE CONTAS A PAGAR */}
+          {upcomingReminders.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-extrabold text-white">⏰ Próximas Contas a Pagar</h2>
+                <Link
+                  to="/calendario"
+                  className="rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3 py-1.5 text-xs font-bold text-emerald-300"
+                >
+                  Abrir Agenda →
+                </Link>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {upcomingReminders.map((r) => (
+                  <Link
+                    key={r.id}
+                    to="/calendario"
+                    className="rounded-2xl border border-amber-500/30 bg-zinc-900/70 p-4 flex items-center justify-between hover:border-amber-400 transition"
+                  >
+                    <div className="min-w-0">
+                      <span className="text-xs font-extrabold text-amber-300">
+                        Dia {r.date.split('-')[2]}/{r.date.split('-')[1]}
+                      </span>
+                      <p className="text-sm font-bold text-white truncate mt-0.5">{r.title}</p>
+                    </div>
+                    <span className="text-sm font-black text-white tabular-nums shrink-0 ml-2">
+                      {r.amount_cents ? formatBRL(r.amount_cents) : 'Ver'}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* GASTOS POR CATEGORIA (LISTA ÚNICA E DIRETA) */}
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-white">Meus Gastos por Categoria</h2>
+                <p className="text-xs text-zinc-400">
+                  Toque em qualquer categoria para ver onde você gastou
+                </p>
+              </div>
+              <Link
+                to="/orcamento"
+                className="rounded-xl border border-white/10 bg-zinc-900 px-3 py-2 text-xs font-bold text-zinc-200 hover:bg-zinc-800"
+              >
+                Ajustar Limites
+              </Link>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {data.categories.map((c) => {
+                const hasBudget = c.budget_cents > 0;
+                const left = c.budget_cents - c.spent_cents;
+                return (
+                  <Link
+                    key={c.id}
+                    to={`/extrato?categoria=${c.id}`}
+                    className="block rounded-2xl border border-white/10 bg-zinc-950/90 p-4 hover:border-emerald-500/40 transition"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-xl shrink-0">{getCategoryIcon(c.name, c.icon)}</span>
+                        <div className="min-w-0">
+                          <p className="font-extrabold text-base text-white truncate">{c.name}</p>
+                          <p className="text-xs text-zinc-400">
+                            {hasBudget
+                              ? left >= 0
+                                ? `Ainda pode gastar ${formatBRL(left)}`
+                                : `Passou ${formatBRL(-left)} do limite`
+                              : `${c.count} ${c.count === 1 ? 'gasto anotado' : 'gastos anotados'}`}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-base font-black text-white tabular-nums">
+                          {formatBRL(c.spent_cents)}
+                        </p>
+                        {hasBudget && (
+                          <p className="text-xs text-zinc-400 tabular-nums">
+                            de {formatBRL(c.budget_cents)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {hasBudget && (
+                      <ProgressBar spent={c.spent_cents} budget={c.budget_cents} className="mt-3 h-2.5" />
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {data && metrics && !isSimple && (
         <>
           {/* ================= ITENS 69, 70, 78, 93: MASCOTE CAPI REATIVO, SCORE DE SAÚDE (0-100) & INSIGHTS IA ================= */}
           {(() => {

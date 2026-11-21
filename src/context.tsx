@@ -305,4 +305,64 @@ export function PrivacyProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// ---------- Modo de Visualização: Detalhado vs Simples (Para iniciantes / idosos) ----------
+export type ViewMode = 'detailed' | 'simple';
+
+type ViewModeCtx = {
+  viewMode: ViewMode;
+  isSimple: boolean;
+  setViewMode: (m: ViewMode) => void;
+  toggleViewMode: () => void;
+};
+
+const ViewModeContext = createContext<ViewModeCtx>({
+  viewMode: 'detailed',
+  isSimple: false,
+  setViewMode: () => {},
+  toggleViewMode: () => {},
+});
+
+export const useViewMode = () => useContext(ViewModeContext);
+
+export function ViewModeProvider({ children }: { children: ReactNode }) {
+  const [viewMode, setViewModeState] = useState<ViewMode>(() => {
+    try {
+      return localStorage.getItem('capi:view_mode') === 'simple' ? 'simple' : 'detailed';
+    } catch {
+      return 'detailed';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('capi:view_mode', viewMode);
+      if (viewMode === 'simple') {
+        document.documentElement.classList.add('simple-mode');
+      } else {
+        document.documentElement.classList.remove('simple-mode');
+      }
+    } catch {}
+  }, [viewMode]);
+
+  const setViewMode = useCallback((m: ViewMode) => setViewModeState(m), []);
+  const toggleViewMode = useCallback(
+    () => setViewModeState((prev) => (prev === 'simple' ? 'detailed' : 'simple')),
+    [],
+  );
+
+  return (
+    <ViewModeContext.Provider
+      value={{
+        viewMode,
+        isSimple: viewMode === 'simple',
+        setViewMode,
+        toggleViewMode,
+      }}
+    >
+      {children}
+    </ViewModeContext.Provider>
+  );
+}
+
+
 

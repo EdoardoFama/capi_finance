@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, Link, useLocation } from 'react-router';
-import { useAuth, useConfirm, usePrivacy, useToast } from '../context';
+import { useAuth, useConfirm, usePrivacy, useToast, useViewMode } from '../context';
 import {
   IconCalendar,
   IconCreditCard,
@@ -42,6 +42,7 @@ export default function Layout() {
   const toast = useToast();
   const location = useLocation();
   const { isPrivate, togglePrivacy } = usePrivacy();
+  const { isSimple, setViewMode } = useViewMode();
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -409,6 +410,48 @@ export default function Layout() {
 
           {/* Ações Rápidas & Perfil */}
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Interruptor: Modo Simples vs Detalhado */}
+            <div
+              className="flex items-center rounded-xl border border-white/[0.1] bg-zinc-950/90 p-0.5 shadow-inner"
+              role="group"
+              aria-label="Modo de visualização"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isSimple) {
+                    setViewMode('simple');
+                    toast('🌿 Modo Simples ativado! Visual limpo e direto.');
+                  }
+                }}
+                className={`rounded-lg px-2 sm:px-2.5 py-1 text-[10px] sm:text-[11px] font-extrabold transition-all ${
+                  isSimple
+                    ? 'bg-emerald-400 text-black shadow-sm shadow-emerald-500/30'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Modo Simples: ideal para iniciantes ou idosos, com menos detalhes e leitura fácil"
+              >
+                Simples
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSimple) {
+                    setViewMode('detailed');
+                    toast('📊 Modo Detalhado ativado! Visão completa com gráficos.');
+                  }
+                }}
+                className={`rounded-lg px-2 sm:px-2.5 py-1 text-[10px] sm:text-[11px] font-extrabold transition-all ${
+                  !isSimple
+                    ? 'bg-zinc-800 text-white border border-white/10 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Modo Detalhado: visão completa com gráficos, projeções e filtros avançados"
+              >
+                Detalhado
+              </button>
+            </div>
+
             {/* Botão Modo Privacidade (Olhinho) */}
             <button
               type="button"
@@ -432,7 +475,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={handleLockNow}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-emerald-300 active:scale-95"
+              className="hidden sm:flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900/60 text-zinc-400 transition hover:bg-zinc-800 hover:text-emerald-300 active:scale-95"
               title="Bloquear aplicativo agora (PIN / Biometria)"
               aria-label="Bloquear tela"
             >

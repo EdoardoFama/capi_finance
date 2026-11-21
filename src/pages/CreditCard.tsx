@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { api, getCategoryIcon, type Category, type CreditCardInvoice, type Expense } from '../api';
-import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice, useViewMode } from '../context';
 import { centsToInput, dayLabel, formatBRL, formatCurrencyInput, monthLabel, parseBRL } from '../format';
 import {
   Card,
@@ -23,6 +23,7 @@ import DistributionChart from '../components/DistributionChart';
 
 export default function CreditCard() {
   const { month } = useMonth();
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const confirmChoice = useConfirmChoice();
@@ -433,20 +434,22 @@ export default function CreditCard() {
                 </div>
 
                 {/* Sub-painel: Compras à vista vs Compras parceladas */}
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-zinc-950/60 px-4 py-2.5 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-400">Compras à vista (1x):</span>
-                    <span className="font-bold text-zinc-200 tabular-nums">
-                      {formatBRL(invoiceStats.singleTotal)}
-                    </span>
+                {!isSimple && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/[0.06] bg-zinc-950/60 px-4 py-2.5 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-400">Compras à vista (1x):</span>
+                      <span className="font-bold text-zinc-200 tabular-nums">
+                        {formatBRL(invoiceStats.singleTotal)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-purple-300">Compras parceladas:</span>
+                      <span className="font-bold text-purple-300 tabular-nums">
+                        {formatBRL(invoiceStats.installmentsTotal)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-purple-300">Compras parceladas:</span>
-                    <span className="font-bold text-purple-300 tabular-nums">
-                      {formatBRL(invoiceStats.installmentsTotal)}
-                    </span>
-                  </div>
-                </div>
+                )}
 
                 {/* Rodapé de Ação da Fatura */}
                 <div className="relative mt-5 pt-4 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-3">
@@ -514,7 +517,7 @@ export default function CreditCard() {
           </div>
 
           {/* ================= ITEM 12: SIMULADOR DE FECHAMENTO (DIA 21) & VENCIMENTO (DIA 27) ================= */}
-          {invoice?.cycle && (
+          {!isSimple && invoice?.cycle && (
             <div className="rounded-3xl border border-purple-500/30 bg-gradient-to-br from-zinc-950 via-zinc-950 to-purple-950/25 p-5 shadow-xl space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5">
@@ -582,6 +585,7 @@ export default function CreditCard() {
           )}
 
           {/* ================= ITENS 15 & 16: HISTÓRICO DE FATURAS E DIVISÃO POR CATEGORIA ================= */}
+          {!isSimple && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Item 15: Histórico Gráfico das Últimas 6 Faturas */}
             {invoice?.history && invoice.history.length > 0 && (
@@ -670,6 +674,7 @@ export default function CreditCard() {
               </Card>
             )}
           </div>
+          )}
 
           {/* Modal de Pagamento de Fatura (Parcial ou Total) */}
           <Modal
@@ -846,7 +851,7 @@ export default function CreditCard() {
           </Modal>
 
           {/* Dashboard de Distribuição da Fatura */}
-          {invoiceTotal > 0 && (
+          {!isSimple && invoiceTotal > 0 && (
             <DistributionChart
               title="Distribuição da Fatura por Categoria"
               subtitle="Veja para quais categorias estão indo os gastos do seu cartão neste mês"
@@ -879,7 +884,7 @@ export default function CreditCard() {
               </div>
 
               {/* Filtro Rápido: Todas / À vista / Parceladas */}
-              {expensesCollapse.isOpen && (
+              {!isSimple && expensesCollapse.isOpen && (
                 <div
                   className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs"
                   onClick={(e) => e.stopPropagation()}
@@ -920,13 +925,13 @@ export default function CreditCard() {
             </div>
 
             {expensesCollapse.isOpen && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className={isSimple ? 'grid grid-cols-1 gap-2.5' : 'grid grid-cols-1 sm:grid-cols-2 gap-2.5'}>
                 {/* Busca por texto */}
                 <div className="relative">
                   <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
                   <input
                     type="text"
-                    placeholder="Buscar compra, loja ou categoria..."
+                    placeholder={isSimple ? 'Procurar compra no cartão...' : 'Buscar compra, loja ou categoria...'}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-purple-500/60"
@@ -942,19 +947,21 @@ export default function CreditCard() {
                 </div>
 
                 {/* Filtro por Categoria com CustomSelect */}
-                <CustomSelect
-                  value={selectedCategory}
-                  onChange={setSelectedCategory}
-                  options={[
-                    { value: 'all', label: 'Todas as categorias' },
-                    ...categories.map((c) => ({
-                      value: String(c.id),
-                      label: c.name,
-                    })),
-                  ]}
-                  placeholder="Selecione uma categoria"
-                  searchPlaceholder="Pesquisar categoria..."
-                />
+                {!isSimple && (
+                  <CustomSelect
+                    value={selectedCategory}
+                    onChange={setSelectedCategory}
+                    options={[
+                      { value: 'all', label: 'Todas as categorias' },
+                      ...categories.map((c) => ({
+                        value: String(c.id),
+                        label: c.name,
+                      })),
+                    ]}
+                    placeholder="Selecione uma categoria"
+                    searchPlaceholder="Pesquisar categoria..."
+                  />
+                )}
               </div>
             )}
           </Card>

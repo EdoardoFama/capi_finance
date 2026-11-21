@@ -12,7 +12,7 @@ import {
   type Income,
   type SavingsGoal,
 } from '../api';
-import { useToast, useConfirm } from '../context';
+import { useToast, useConfirm, useViewMode } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL } from '../format';
 import { Card, CollapseButton, IconPlus, IconTrash, Input, PageTitle, ProgressBar, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
@@ -99,12 +99,14 @@ function IncomeRow({
 function CategoryRow({
   item,
   totalIncome,
+  isSimple,
   onSave,
   onDelete,
   onMove,
 }: {
   item: Category;
   totalIncome: number;
+  isSimple?: boolean;
   onSave: (id: number, patch: { name?: string; budget_cents?: number; note?: string; is_fixed?: number; icon?: string }) => Promise<void>;
   onDelete: (id: number, name: string) => void;
   onMove?: (dir: -1 | 1) => void;
@@ -161,7 +163,7 @@ function CategoryRow({
     <div className="py-3 space-y-2 transition hover:bg-zinc-900/35 px-2.5 rounded-2xl">
       <div className="flex items-center gap-2">
         {/* Item 27: Botões de Reordenação */}
-        {onMove && (
+        {!isSimple && onMove && (
           <div className="flex flex-col gap-0.5 shrink-0">
             <button
               type="button"
@@ -185,30 +187,32 @@ function CategoryRow({
         {/* Item 28: Ícone da Categoria */}
         <button
           type="button"
-          onClick={() => setPickingIcon((p) => !p)}
+          onClick={() => !isSimple && setPickingIcon((p) => !p)}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-zinc-900 text-base hover:border-emerald-500/40 transition"
-          title="Clique para personalizar o ícone desta categoria"
+          title="Ícone desta categoria"
         >
           {getCategoryIcon(name, icon)}
         </button>
 
         {/* Botão de Alternar Fixa / Variável */}
-        <button
-          type="button"
-          onClick={toggleFixed}
-          className={`shrink-0 rounded-xl px-2.5 py-2 text-xs font-extrabold border transition ${
-            isFixed === 1
-              ? 'bg-blue-500/15 text-blue-300 border-blue-500/35 hover:bg-blue-500/25'
-              : 'bg-purple-500/15 text-purple-300 border-purple-500/35 hover:bg-purple-500/25'
-          }`}
-          title={
-            isFixed === 1
-              ? 'Categoria Fixa (com teto). Clique para mudar para Variável.'
-              : 'Categoria Variável (Por Fora). Clique para mudar para Fixa.'
-          }
-        >
-          {isFixed === 1 ? 'Fixa' : 'Variável'}
-        </button>
+        {!isSimple && (
+          <button
+            type="button"
+            onClick={toggleFixed}
+            className={`shrink-0 rounded-xl px-2.5 py-2 text-xs font-extrabold border transition ${
+              isFixed === 1
+                ? 'bg-blue-500/15 text-blue-300 border-blue-500/35 hover:bg-blue-500/25'
+                : 'bg-purple-500/15 text-purple-300 border-purple-500/35 hover:bg-purple-500/25'
+            }`}
+            title={
+              isFixed === 1
+                ? 'Categoria Fixa (com teto). Clique para mudar para Variável.'
+                : 'Categoria Variável (Por Fora). Clique para mudar para Fixa.'
+            }
+          >
+            {isFixed === 1 ? 'Fixa' : 'Variável'}
+          </button>
+        )}
 
         {/* Campo Nome da Categoria */}
         <div className="flex-1 min-w-0">
@@ -256,30 +260,32 @@ function CategoryRow({
       </div>
 
       {/* Linha auxiliar: Observação e indicador de % da renda ou Por Fora */}
-      <div className="flex items-center gap-2 pl-2 sm:pl-14 pr-10">
-        <input
-          value={note}
-          placeholder={
-            isFixed === 1
-              ? 'Adicionar nota / descrição (ex: XBOX - 20 + GEMINI IA - 36)...'
-              : 'Observação da categoria variável...'
-          }
-          onChange={(e) => setNote(e.target.value)}
-          onBlur={commitNote}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          className="w-full rounded-lg bg-zinc-900/50 px-3 py-1.5 text-xs text-zinc-300 placeholder:text-zinc-600 outline-none border border-transparent focus:border-white/15 focus:bg-zinc-900"
-        />
-        {isFixed === 1 && incomeShare && (
-          <span className="shrink-0 rounded-md bg-zinc-900 border border-white/[0.06] px-2 py-0.5 text-[10px] font-bold text-zinc-400 tabular-nums">
-            {incomeShare}% da renda
-          </span>
-        )}
-        {isFixed === 0 && (
-          <span className="shrink-0 text-[10px] font-bold text-purple-300 bg-purple-500/15 px-2 py-0.5 rounded-md border border-purple-500/25">
-            Por Fora
-          </span>
-        )}
-      </div>
+      {!isSimple && (
+        <div className="flex items-center gap-2 pl-2 sm:pl-14 pr-10">
+          <input
+            value={note}
+            placeholder={
+              isFixed === 1
+                ? 'Adicionar nota / descrição (ex: XBOX - 20 + GEMINI IA - 36)...'
+                : 'Observação da categoria variável...'
+            }
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={commitNote}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            className="w-full rounded-lg bg-zinc-900/50 px-3 py-1.5 text-xs text-zinc-300 placeholder:text-zinc-600 outline-none border border-transparent focus:border-white/15 focus:bg-zinc-900"
+          />
+          {isFixed === 1 && incomeShare && (
+            <span className="shrink-0 rounded-md bg-zinc-900 border border-white/[0.06] px-2 py-0.5 text-[10px] font-bold text-zinc-400 tabular-nums">
+              {incomeShare}% da renda
+            </span>
+          )}
+          {isFixed === 0 && (
+            <span className="shrink-0 text-[10px] font-bold text-purple-300 bg-purple-500/15 px-2 py-0.5 rounded-md border border-purple-500/25">
+              Por Fora
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Item 28: Seletor de Ícones Personalizados */}
       {pickingIcon && (
@@ -476,6 +482,7 @@ function AddCategoryRow({
    TELA PRINCIPAL: ORÇAMENTO PESSOAL
    ========================================================= */
 export default function Budget() {
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const [incomes, setIncomes] = useState<Income[] | null>(null);
@@ -680,12 +687,14 @@ export default function Budget() {
       </div>
 
       {/* Dashboard de Distribuição do Orçamento */}
-      <DistributionChart
-        title="Distribuição do Orçamento Fixo"
-        subtitle="Peso percentual de cada categoria planejada dentro do seu custo fixo mensal"
-        items={budgetDistributionItems}
-        storageKey="budget_distribution"
-      />
+      {!isSimple && (
+        <DistributionChart
+          title="Distribuição do Orçamento Fixo"
+          subtitle="Peso percentual de cada categoria planejada dentro do seu custo fixo mensal"
+          items={budgetDistributionItems}
+          storageKey="budget_distribution"
+        />
+      )}
 
       {/* Seção Ganhos */}
       <Card>
@@ -779,7 +788,7 @@ export default function Budget() {
           </div>
 
           {/* Abas de Filtro para visualização */}
-          {catsCollapse.isOpen && (
+          {!isSimple && catsCollapse.isOpen && (
             <div className="flex items-center rounded-xl border border-white/[0.08] bg-zinc-900 p-1 text-xs">
               <button
                 type="button"
@@ -820,6 +829,7 @@ export default function Budget() {
                   key={c.id}
                   item={c}
                   totalIncome={totalIncome}
+                  isSimple={isSimple}
                   onMove={(dir) => handleMoveCategory(c.id, dir)}
                   onSave={async (id, patch) => {
                     const isTypeChange = patch.is_fixed !== undefined;
@@ -866,6 +876,7 @@ export default function Budget() {
       </Card>
 
       {/* ================= ITENS 22 & 23: COFRES, METAS DE RESERVA & SONHOS ================= */}
+      {!isSimple && (
       <Card>
         <div
           className={`flex items-center justify-between ${
@@ -1023,6 +1034,7 @@ export default function Budget() {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

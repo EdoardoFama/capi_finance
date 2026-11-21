@@ -11,7 +11,7 @@ import {
   type Inflow,
   type UserAccount,
 } from '../api';
-import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice, useViewMode } from '../context';
 import { dayLabel, formatBRL, monthLabel, parseBRL } from '../format';
 import {
   Card,
@@ -37,6 +37,7 @@ import MonthlyAnalyticsView from '../components/MonthlyAnalyticsView';
 
 export default function History() {
   const { month } = useMonth();
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const confirmChoice = useConfirmChoice();
@@ -415,14 +416,16 @@ export default function History() {
           subtitle={`Histórico detalhado de saídas e entradas em ${monthLabel(month)}`}
         />
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setExportOpen(true)}
-            className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-zinc-200 transition hover:bg-zinc-800"
-            title="Exportar dados (PDF ou CSV)"
-          >
-            <IconDownload className="h-4 w-4 text-emerald-400" />
-            Exportar
-          </button>
+          {!isSimple && (
+            <button
+              onClick={() => setExportOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-zinc-900 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-zinc-200 transition hover:bg-zinc-800"
+              title="Exportar dados (PDF ou CSV)"
+            >
+              <IconDownload className="h-4 w-4 text-emerald-400" />
+              Exportar
+            </button>
+          )}
           <Link
             to="/lancar"
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-400 px-3.5 py-2.5 text-xs sm:text-sm font-extrabold text-black shadow-lg shadow-emerald-500/20 transition hover:brightness-110"
@@ -433,34 +436,36 @@ export default function History() {
       </div>
 
       {/* Segmented Control: Extrato Mensal vs Comparativo Histórico */}
-      <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/[0.08] bg-zinc-950/70 p-1 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={() => setViewMode('monthly')}
-          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
-            viewMode === 'monthly'
-              ? 'bg-zinc-800 text-white shadow border border-white/10'
-              : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
-          }`}
-        >
-          <IconList className="h-4 w-4 shrink-0" />
-          <span className="truncate">Extrato Mensal</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setViewMode('analytics')}
-          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
-            viewMode === 'analytics'
-              ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 shadow'
-              : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
-          }`}
-        >
-          <IconTrendingUp className="h-4 w-4 shrink-0" />
-          <span className="truncate">Comparativo (6 Meses)</span>
-        </button>
-      </div>
+      {!isSimple && (
+        <div className="grid grid-cols-2 gap-1.5 rounded-2xl border border-white/[0.08] bg-zinc-950/70 p-1 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={() => setViewMode('monthly')}
+            className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
+              viewMode === 'monthly'
+                ? 'bg-zinc-800 text-white shadow border border-white/10'
+                : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+            }`}
+          >
+            <IconList className="h-4 w-4 shrink-0" />
+            <span className="truncate">Extrato Mensal</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('analytics')}
+            className={`flex items-center justify-center gap-2 rounded-xl py-2 px-3 text-xs sm:text-sm font-bold min-h-[42px] transition ${
+              viewMode === 'analytics'
+                ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 shadow'
+                : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+            }`}
+          >
+            <IconTrendingUp className="h-4 w-4 shrink-0" />
+            <span className="truncate">Comparativo (6 Meses)</span>
+          </button>
+        </div>
+      )}
 
-      {viewMode === 'analytics' ? (
+      {!isSimple && viewMode === 'analytics' ? (
         <MonthlyAnalyticsView currentMonth={month} />
       ) : (
         <>
@@ -590,7 +595,7 @@ export default function History() {
       )}
 
       {/* Gráfico de distribuição dos gastos realizados */}
-      {(expenses?.length ?? 0) > 0 && (
+      {!isSimple && (expenses?.length ?? 0) > 0 && (
         <DistributionChart
           title="Distribuição dos Gastos Realizados"
           subtitle="Para onde foi o seu dinheiro de acordo com as saídas deste mês • Toque para filtrar"
@@ -679,86 +684,90 @@ export default function History() {
           <>
 
         {/* Filtro Rápido por Conta */}
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
-          <button
-            type="button"
-            onClick={() => setSelectedAccount('all')}
-            className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
-              selectedAccount === 'all'
-                ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-300'
-                : 'border-white/[0.07] bg-zinc-900 text-zinc-400 hover:text-white'
-            }`}
-          >
-            Todas as Contas
-          </button>
-          {userAccounts.map((acc) => (
+        {!isSimple && (
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
             <button
-              key={acc.slug}
               type="button"
-              onClick={() => setSelectedAccount(acc.slug)}
-              className={`shrink-0 flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
-                selectedAccount === acc.slug
-                  ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+              onClick={() => setSelectedAccount('all')}
+              className={`shrink-0 rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
+                selectedAccount === 'all'
+                  ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-300'
                   : 'border-white/[0.07] bg-zinc-900 text-zinc-400 hover:text-white'
               }`}
             >
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
-              {acc.name}
+              Todas as Contas
             </button>
-          ))}
-        </div>
+            {userAccounts.map((acc) => (
+              <button
+                key={acc.slug}
+                type="button"
+                onClick={() => setSelectedAccount(acc.slug)}
+                className={`shrink-0 flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
+                  selectedAccount === acc.slug
+                    ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+                    : 'border-white/[0.07] bg-zinc-900 text-zinc-400 hover:text-white'
+                }`}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
+                {acc.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Item 20 & 42/43: Alternador Rápido Crédito vs Débito + Botão Modo Lote */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.07] bg-zinc-950 p-1 text-[11px]">
+        {!isSimple && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.07] bg-zinc-950 p-1 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setPaymentFilter('all')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  paymentFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Todas Modalidades
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentFilter('credit')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  paymentFilter === 'credit'
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                💳 Apenas Crédito
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentFilter('debit_pix')}
+                className={`rounded-lg px-2.5 py-1 font-bold transition ${
+                  paymentFilter === 'debit_pix'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                ⚡ Apenas Débito / Pix
+              </button>
+            </div>
+
             <button
               type="button"
-              onClick={() => setPaymentFilter('all')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                paymentFilter === 'all' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-white'
+              onClick={() => {
+                setBatchMode((b) => !b);
+                setSelectedIds(new Set());
+              }}
+              className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
+                batchMode
+                  ? 'border-amber-500/40 bg-amber-500/20 text-amber-300'
+                  : 'border-white/[0.08] bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
               }`}
             >
-              Todas Modalidades
-            </button>
-            <button
-              type="button"
-              onClick={() => setPaymentFilter('credit')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                paymentFilter === 'credit'
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              💳 Apenas Crédito
-            </button>
-            <button
-              type="button"
-              onClick={() => setPaymentFilter('debit_pix')}
-              className={`rounded-lg px-2.5 py-1 font-bold transition ${
-                paymentFilter === 'debit_pix'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              ⚡ Apenas Débito / Pix
+              {batchMode ? '✕ Sair da Seleção em Lote' : '☑️ Seleção em Lote'}
             </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setBatchMode((b) => !b);
-              setSelectedIds(new Set());
-            }}
-            className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition ${
-              batchMode
-                ? 'border-amber-500/40 bg-amber-500/20 text-amber-300'
-                : 'border-white/[0.08] bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
-            }`}
-          >
-            {batchMode ? '✕ Sair da Seleção em Lote' : '☑️ Seleção em Lote'}
-          </button>
-        </div>
+        )}
 
         {/* Barra de Ações em Lote (Itens 42 e 43) */}
         {batchMode && (
@@ -822,7 +831,7 @@ export default function History() {
             <IconSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
             <input
               type="text"
-              placeholder="Buscar nome, #tag ou valor (ex: >100, <50, =42,80)..."
+              placeholder={isSimple ? 'Procurar gasto pelo nome...' : 'Buscar nome, #tag ou valor (ex: >100, <50, =42,80)...'}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-xl border border-white/[0.08] bg-zinc-900 pl-9 pr-8 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-500/60"
@@ -1001,7 +1010,8 @@ export default function History() {
                               : exp.account_id.toUpperCase()}
                           </span>
                           {/* Item 44: Tags */}
-                          {exp.tags &&
+                          {!isSimple &&
+                            exp.tags &&
                             exp.tags
                               .split(/\s+/)
                               .filter(Boolean)

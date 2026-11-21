@@ -12,7 +12,7 @@ import {
   type AccountId,
   ACCOUNT_DEFINITIONS,
 } from '../api';
-import { useMonth, useToast, useConfirm, useConfirmChoice } from '../context';
+import { useMonth, useToast, useConfirm, useConfirmChoice, useViewMode } from '../context';
 import { dayLabel, formatBRL, formatCurrencyInput, parseBRL, percent, todayISO } from '../format';
 import {
   Card,
@@ -46,6 +46,7 @@ const QUICK_INFLOW_SUGGESTIONS = [
 
 export default function Expenses() {
   const { month, setMonth } = useMonth();
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const confirmChoice = useConfirmChoice();
@@ -557,17 +558,19 @@ export default function Expenses() {
                   Valor da Saída (Gasto)
                 </label>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowCalc((v) => !v)}
-                    className={`rounded-lg border px-2 py-0.5 text-[11px] font-bold transition ${
-                      showCalc
-                        ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300'
-                        : 'border-white/10 bg-zinc-900 text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    🧮 Calculadora
-                  </button>
+                  {!isSimple && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCalc((v) => !v)}
+                      className={`rounded-lg border px-2 py-0.5 text-[11px] font-bold transition ${
+                        showCalc
+                          ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300'
+                          : 'border-white/10 bg-zinc-900 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      🧮 Calculadora
+                    </button>
+                  )}
                   {accountId === 'nubank' && paymentMethod === 'credit' && installments > 1 && (
                     <button
                       type="button"
@@ -725,13 +728,35 @@ export default function Expenses() {
             {/* 3. SELEÇÃO DE CATEGORIA (AGRUPADA POR FIXAS E VARIÁVEIS) */}
             <div className="space-y-3">
               <label className="block text-xs font-bold tracking-wider text-zinc-400 uppercase">
-                Categoria da Saída <span className="text-emerald-400">*</span>
+                {isSimple ? 'Em qual categoria você gastou?' : 'Categoria da Saída'}{' '}
+                <span className="text-emerald-400">*</span>
               </label>
 
               {!dash ? (
                 <p className="text-sm text-zinc-500">Carregando categorias…</p>
               ) : dash.categories.length === 0 ? (
                 <p className="text-sm text-zinc-500">Crie categorias na tela de Orçamento.</p>
+              ) : isSimple ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 rounded-2xl border border-white/[0.08] bg-zinc-900/40 p-3.5">
+                  {dash.categories.map((c) => {
+                    const active = c.id === categoryId;
+                    return (
+                      <button
+                        type="button"
+                        key={c.id}
+                        onClick={() => setCategoryId(c.id)}
+                        className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-xs sm:text-sm font-bold transition-all ${
+                          active
+                            ? 'border-emerald-400 bg-emerald-400 text-black shadow-md shadow-emerald-500/20'
+                            : 'border-white/[0.08] bg-zinc-900 text-zinc-200 hover:border-white/20 hover:bg-zinc-800'
+                        }`}
+                      >
+                        <span className="text-base shrink-0">{getCategoryIcon(c.name, c.icon)}</span>
+                        <span className="truncate">{c.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               ) : (
                 <div className="space-y-3 rounded-2xl border border-white/[0.06] bg-zinc-900/40 p-3.5">
                   {/* Fixas */}
@@ -801,7 +826,7 @@ export default function Expenses() {
               )}
 
               {/* Preview Inteligente do Impacto no Orçamento */}
-              {selected && dash && (
+              {!isSimple && selected && dash && (
                 <div className="rounded-2xl border border-white/[0.08] bg-zinc-900/75 p-3.5">
                   {selected.is_fixed === 1 ? (
                     (() => {
@@ -876,18 +901,20 @@ export default function Expenses() {
                 />
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <div>
-                  <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
-                    Observação / Detalhe (opcional)
-                  </label>
-                  <Input
-                    placeholder="Ex: Compra da semana, Jantar de sexta..."
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    maxLength={200}
-                  />
-                </div>
+              <div className={isSimple ? '' : 'grid gap-3 sm:grid-cols-[1fr_auto]'}>
+                {!isSimple && (
+                  <div>
+                    <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
+                      Observação / Detalhe (opcional)
+                    </label>
+                    <Input
+                      placeholder="Ex: Compra da semana, Jantar de sexta..."
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      maxLength={200}
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
                     Data da Compra
@@ -903,31 +930,33 @@ export default function Expenses() {
               </div>
 
               {/* Item 44: Tags Opcionais */}
-              <div>
-                <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
-                  Tags / Marcadores (opcional)
-                </label>
-                <Input
-                  placeholder="Ex: #viagem #casa #reforma"
-                  value={tags}
-                  onChange={(e) => setTags(e.target.value)}
-                  maxLength={120}
-                />
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {['#mercado', '#casa', '#viagem', '#lazer', '#trabalho', '#emergencia'].map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() =>
-                        setTags((prev) => (prev.includes(t) ? prev : `${prev} ${t}`.trim()))
-                      }
-                      className="rounded-lg border border-white/[0.07] bg-zinc-900/60 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 hover:border-emerald-500/40 hover:text-emerald-300 transition"
-                    >
-                      {t}
-                    </button>
-                  ))}
+              {!isSimple && (
+                <div>
+                  <label className="mb-1 block text-xs font-bold tracking-wider text-zinc-400 uppercase">
+                    Tags / Marcadores (opcional)
+                  </label>
+                  <Input
+                    placeholder="Ex: #viagem #casa #reforma"
+                    value={tags}
+                    onChange={(e) => setTags(e.target.value)}
+                    maxLength={120}
+                  />
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {['#mercado', '#casa', '#viagem', '#lazer', '#trabalho', '#emergencia'].map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() =>
+                          setTags((prev) => (prev.includes(t) ? prev : `${prev} ${t}`.trim()))
+                        }
+                        className="rounded-lg border border-white/[0.07] bg-zinc-900/60 px-2 py-0.5 text-[10px] font-semibold text-zinc-400 hover:border-emerald-500/40 hover:text-emerald-300 transition"
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <button

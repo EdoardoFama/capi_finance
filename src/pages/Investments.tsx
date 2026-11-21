@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, type InvestmentAccount, type InvestmentSnapshot, type InvestmentsData, type RedeemResult, type UserAccount } from '../api';
-import { useToast, useConfirm } from '../context';
+import { useToast, useConfirm, useViewMode } from '../context';
 import { centsToInput, formatBRL, formatCurrencyInput, parseBRL, shiftMonth, todayISO } from '../format';
 import { Card, CollapseButton, CustomSelect, IconArrowDownLeft, IconEdit, IconPlus, IconTrash, Modal, PageTitle, Spinner, useCollapsible } from '../components/ui';
 import DistributionChart from '../components/DistributionChart';
@@ -17,6 +17,7 @@ function formatMonthHeader(ym: string) {
 }
 
 export default function Investments() {
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const [data, setData] = useState<InvestmentsData | null>(null);
@@ -475,6 +476,96 @@ export default function Investments() {
         )}
       </div>
 
+      {/* MODO SIMPLES: LISTA DIRETA E CLARA DOS BANCOS/CORRETORAS */}
+      {isSimple ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base sm:text-lg font-extrabold text-white">
+                Onde meu dinheiro está guardado
+              </h2>
+              <p className="text-xs text-zinc-400">
+                Toque em Atualizar Saldos para informar o valor atual ou em Sacar para transferir para sua conta
+              </p>
+            </div>
+          </div>
+
+          {data.accounts.length === 0 ? (
+            <Card className="p-6 text-center space-y-3">
+              <p className="text-sm font-bold text-zinc-200">Nenhum banco ou corretora cadastrado</p>
+              <button
+                type="button"
+                onClick={() => setIsAddAccountOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-400 px-4 py-2.5 text-xs font-extrabold text-black hover:bg-emerald-300"
+              >
+                <IconPlus className="h-4 w-4" /> Adicionar Banco / Corretora
+              </button>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {data.accounts.map((acc) => {
+                const currentBal = getAccountLatestBalance(acc.id);
+                return (
+                  <Card key={acc.id} className="flex flex-col justify-between gap-4 p-5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="h-3.5 w-3.5 rounded-full shrink-0 ring-2 ring-white/10"
+                          style={{ backgroundColor: acc.color }}
+                        />
+                        <h3 className="text-base font-extrabold text-white">{acc.name}</h3>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditAccountModal(acc)}
+                          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                          title={`Editar ${acc.name}`}
+                        >
+                          <IconEdit className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAccount(acc.id, acc.name)}
+                          className="rounded-lg p-1.5 text-zinc-500 hover:bg-red-500/20 hover:text-red-400"
+                          title={`Excluir ${acc.name}`}
+                        >
+                          <IconTrash className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-zinc-400">Valor Guardado Atual:</p>
+                      <p className="text-2xl sm:text-3xl font-black text-emerald-400 tabular-nums mt-0.5">
+                        {formatBRL(currentBal)}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/[0.06]">
+                      <button
+                        type="button"
+                        onClick={() => openMonthEditor(activeLatestMonth || new Date().toISOString().slice(0, 7))}
+                        className="rounded-xl border border-white/10 bg-zinc-900 py-2.5 text-xs font-bold text-zinc-200 hover:bg-zinc-800 transition"
+                      >
+                        ✏️ Alterar Valor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openRedeemModal(acc.id)}
+                        className="rounded-xl border border-amber-500/30 bg-amber-500/15 py-2.5 text-xs font-extrabold text-amber-300 hover:bg-amber-500/25 transition"
+                      >
+                        ↙ Sacar Dinheiro
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* ================= ITENS 51, 52 E 56: PROJEÇÃO DIÁRIA CDI, INFLAÇÃO E GRÁFICO DE EVOLUÇÃO ================= */}
       {(() => {
         const baseBalance = latestSummary?.totalBalance ?? 0;
@@ -796,6 +887,8 @@ export default function Investments() {
         </div>
         )}
       </Card>
+        </>
+      )}
 
       {/* Modal: Atualizar Saldo do Mês (100% Automático) */}
       <Modal

@@ -11,7 +11,7 @@ import {
   type Expense,
   type Reminder,
 } from '../api';
-import { useMonth, useToast, useConfirm } from '../context';
+import { useMonth, useToast, useConfirm, useViewMode } from '../context';
 import { formatBRL, formatCurrencyInput, parseBRL, monthLabel, shiftMonth, currentMonth, todayISO } from '../format';
 import {
   Card,
@@ -97,6 +97,7 @@ function getExpenseHeat(amount: number, maxAmount: number) {
 
 export default function CalendarPage() {
   const { month, setMonth } = useMonth();
+  const { isSimple } = useViewMode();
   const toast = useToast();
   const confirm = useConfirm();
   const navigate = useNavigate();
@@ -655,16 +656,18 @@ export default function CalendarPage() {
                               {formatBRL(r.amount_cents)}
                             </span>
                           ) : null}
-                          <a
-                            href={buildGoogleCalendarUrl(r)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="rounded-lg border border-blue-500/30 bg-blue-500/15 px-2 py-1 text-[10px] font-bold text-blue-300 hover:bg-blue-500/25"
-                            title="Sincronizar com Google Calendar"
-                          >
-                            📅 Google
-                          </a>
+                          {!isSimple && (
+                            <a
+                              href={buildGoogleCalendarUrl(r)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="rounded-lg border border-blue-500/30 bg-blue-500/15 px-2 py-1 text-[10px] font-bold text-blue-300 hover:bg-blue-500/25"
+                              title="Sincronizar com Google Calendar"
+                            >
+                              📅 Google
+                            </a>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -808,21 +811,23 @@ export default function CalendarPage() {
                     <span className="h-2 w-2 rounded-full bg-amber-400" /> Lembrete pendente
                   </span>
                   {/* Mapa de Calor */}
-                  <div className="flex items-center gap-2 pl-2 border-l border-white/10">
-                    <span className="text-[10px] text-zinc-500 uppercase font-bold">Gastos:</span>
-                    <span className="flex items-center gap-1 text-[10px]" title="Menos gasto">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Menos
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px]" title="Gasto moderado">
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Médio
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px]" title="Gasto elevado">
-                      <span className="h-2 w-2 rounded-full bg-orange-500" /> Alto
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px]" title="Pico de gasto">
-                      <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.8)]" /> Pico
-                    </span>
-                  </div>
+                  {!isSimple && (
+                    <div className="flex items-center gap-2 pl-2 border-l border-white/10">
+                      <span className="text-[10px] text-zinc-500 uppercase font-bold">Gastos:</span>
+                      <span className="flex items-center gap-1 text-[10px]" title="Menos gasto">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Menos
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px]" title="Gasto moderado">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Médio
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px]" title="Gasto elevado">
+                        <span className="h-2 w-2 rounded-full bg-orange-500" /> Alto
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px]" title="Pico de gasto">
+                        <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.8)]" /> Pico
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -977,7 +982,7 @@ export default function CalendarPage() {
                   </div>
 
                   {/* Seletor de Meses para Replicar Lembrete Mensal */}
-                  {remRecurrence === 'monthly' && (
+                  {!isSimple && remRecurrence === 'monthly' && (
                     <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-emerald-300 flex items-center gap-1.5">
@@ -1151,15 +1156,17 @@ export default function CalendarPage() {
 
                             <div className="mt-1 flex items-center justify-end gap-1">
                               {/* Item 33: Sincronizar com Google Calendar */}
-                              <a
-                                href={buildGoogleCalendarUrl(r)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="rounded p-1 text-[10px] font-bold text-blue-400 hover:bg-blue-500/20 transition"
-                                title="Adicionar ao Google Calendar"
-                              >
-                                📅 Google
-                              </a>
+                              {!isSimple && (
+                                <a
+                                  href={buildGoogleCalendarUrl(r)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="rounded p-1 text-[10px] font-bold text-blue-400 hover:bg-blue-500/20 transition"
+                                  title="Adicionar ao Google Calendar"
+                                >
+                                  📅 Google
+                                </a>
+                              )}
 
                               {/* Botão de Lançar no Extrato */}
                               <button
