@@ -551,33 +551,33 @@ export default function CreditCard() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/50 p-3.5">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    Compras até dia 20
+                    Total Desta Fatura
                   </span>
                   <p className="mt-1 text-base font-extrabold text-white tabular-nums">
                     {formatBRL(invoice.cycle.before_closing_cents)}
                   </p>
-                  <span className="text-[10px] text-zinc-500">Dentro do fechamento do dia 21</span>
+                  <span className="text-[10px] text-zinc-500">Compras do ciclo até dia 20</span>
                 </div>
 
                 <div className="rounded-2xl border border-white/[0.06] bg-zinc-900/50 p-3.5">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300">
-                    Compras após dia 21
+                    Compras a partir do dia 21
                   </span>
                   <p className="mt-1 text-base font-extrabold text-purple-300 tabular-nums">
                     {formatBRL(invoice.cycle.after_closing_cents)}
                   </p>
-                  <span className="text-[10px] text-zinc-500">Realizadas após virada do dia 21</span>
+                  <span className="text-[10px] text-zinc-500">Realizadas pós-virada (jogadas p/ próx. mês)</span>
                 </div>
 
                 <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-3.5">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">
-                    Já Agendado p/ Próximo Mês
+                    Próxima Fatura ({monthLabel(invoice.cycle.next_month)})
                   </span>
                   <p className="mt-1 text-base font-extrabold text-emerald-300 tabular-nums">
                     {formatBRL(invoice.cycle.next_month_scheduled_cents)}
                   </p>
                   <span className="text-[10px] text-zinc-500">
-                    Parcelas futuras em {monthLabel(invoice.cycle.next_month)}
+                    Compras pós-dia 21 + parcelas futuras
                   </span>
                 </div>
               </div>

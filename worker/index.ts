@@ -105,6 +105,26 @@ function monthRange(month: string | undefined) {
   return [`${month}-01`, `${next}-01`] as const;
 }
 
+/**
+ * Retorna [início, fim) do ciclo da fatura do cartão no formato YYYY-MM-DD.
+ * O cartão fecha no dia 21 (vence no dia 27).
+ * Logo, a fatura do mês YYYY-MM compreende:
+ * início: dia 21 do mês anterior (inclusive)
+ * fim: dia 21 do mês atual (exclusive -> até 23:59:59 do dia 20)
+ * Compras a partir do dia 21 entram na fatura do mês seguinte.
+ */
+function invoiceRange(month: string | undefined, closingDay = 21): [string, string] {
+  if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad('Mês inválido (use YYYY-MM)');
+  const [y, m] = month!.split('-').map(Number);
+  const prevDate = new Date(y, m - 2, 1);
+  const prevY = prevDate.getFullYear();
+  const prevM = String(prevDate.getMonth() + 1).padStart(2, '0');
+  const dStr = String(closingDay).padStart(2, '0');
+  const start = `${prevY}-${prevM}-${dStr}`;
+  const end = `${y}-${String(m).padStart(2, '0')}-${dStr}`;
+  return [start, end];
+}
+
 const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
 
 async function guardUnique<T>(fn: () => Promise<T>) {
@@ -1704,10 +1724,11 @@ app.get('/dashboard', async (c) => {
     .first<{ total: number }>();
   const inflowsTotalCents = inflowRow?.total ?? 0;
 
+  const [invStart, invEnd] = invoiceRange(month);
   const ccRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`
   )
-    .bind(uid, start, end)
+    .bind(uid, invStart, invEnd)
     .first<{ total: number }>();
   const ccTotalCents = ccRow?.total ?? 0;
 
@@ -2286,14 +2307,14 @@ app.get('/export', async (c) => {
 app.get('/credit-card/invoice', async (c) => {
   const uid = c.get('userId');
   const monthParam = c.req.query('month');
-  const [start, end] = monthRange(monthParam);
   const month = monthParam!;
+  const [invStart, invEnd] = invoiceRange(month);
 
   const { results: expenses } = await c.env.DB.prepare(
     `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.payment_method = 'credit' AND e.spent_on >= ? AND e.spent_on < ?
      ORDER BY e.spent_on DESC, e.id DESC`,
   )
-    .bind(uid, start, end)
+    .bind(uid, invStart, invEnd)
     .all();
 
   const totalCents = expenses.reduce((s, x) => s + Number(x.amount_cents || 0), 0);
@@ -2312,6 +2333,7 @@ app.get('/credit-card/invoice', async (c) => {
 
   let nubankBalanceCents = nubankRow?.initial_cents ?? 0;
   if (nubankRow && nubankBalanceCents > 0 && nubankRow.updated_at) {
+    const [start] = monthRange(month);
     const spentRow = await c.env.DB.prepare(
       `SELECT COALESCE(SUM(amount_cents), 0) AS total
        FROM expenses
@@ -2346,45 +2368,50 @@ app.get('/credit-card/invoice', async (c) => {
   }
   const byCategory = Array.from(byCategoryMap.values()).sort((a, b) => b.total_cents - a.total_cents);
 
-  // Item 15: Histórico gráfico de faturas (últimos 6 meses)
+  // Item 15: Histórico gráfico de faturas (últimos 6 meses no ciclo da fatura)
   const [currY, currM] = month.split('-').map(Number);
   const histMonths: string[] = [];
   for (let i = 5; i >= 0; i--) {
     const d = new Date(currY, currM - 1 - i, 1);
     histMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
   }
-  const histFirstStart = `${histMonths[0]}-01`;
-  const [, histLastEnd] = monthRange(histMonths[histMonths.length - 1]);
 
-  const { results: histRows } = await c.env.DB.prepare(
-    `SELECT substr(spent_on, 1, 7) AS m, COALESCE(SUM(amount_cents), 0) AS total_cents
-     FROM expenses
-     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?
-     GROUP BY m`,
-  )
-    .bind(uid, histFirstStart, histLastEnd)
-    .all<{ m: string; total_cents: number }>();
-  const histMap = new Map(histRows.map((r) => [r.m, r.total_cents]));
-  const history = histMonths.map((m) => ({
-    month: m,
-    total_cents: histMap.get(m) ?? 0,
-  }));
+  const history = await Promise.all(
+    histMonths.map(async (m) => {
+      const [hStart, hEnd] = invoiceRange(m);
+      const row = await c.env.DB.prepare(
+        `SELECT COALESCE(SUM(amount_cents), 0) AS total_cents
+         FROM expenses
+         WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+      )
+        .bind(uid, hStart, hEnd)
+        .first<{ total_cents: number }>();
+      return {
+        month: m,
+        total_cents: row?.total_cents ?? 0,
+      };
+    }),
+  );
 
   // Item 12: Simulador de Fechamento de Fatura (Fecha dia 21 e vence dia 27)
   const nextMonthDate = new Date(currY, currM, 1);
   const nextMonthStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}`;
-  const [nextStart, nextEnd] = monthRange(nextMonthStr);
+  const [nextInvStart, nextInvEnd] = invoiceRange(nextMonthStr);
   const nextProjRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
      WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
   )
-    .bind(uid, nextStart, nextEnd)
+    .bind(uid, nextInvStart, nextInvEnd)
     .first<{ total: number }>();
 
-  const before21Cents = (expenses as any[])
-    .filter((e) => Number(String(e.spent_on).slice(8, 10)) < 21)
-    .reduce((s, e) => s + Number(e.amount_cents || 0), 0);
-  const from21Cents = totalCents - before21Cents;
+  // Compras realizadas a partir do dia 21 do mês corrente (jogadas para o próximo mês)
+  const postClosingRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
+     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+  )
+    .bind(uid, invEnd, `${nextMonthStr}-01`)
+    .first<{ total: number }>();
+  const from21Cents = postClosingRow?.total ?? 0;
 
   return c.json({
     month,
@@ -2402,7 +2429,7 @@ app.get('/credit-card/invoice', async (c) => {
     cycle: {
       closing_day: 21,
       due_day: 27,
-      before_closing_cents: before21Cents,
+      before_closing_cents: totalCents,
       after_closing_cents: from21Cents,
       next_month: nextMonthStr,
       next_month_scheduled_cents: nextProjRow?.total ?? 0,
@@ -2414,13 +2441,13 @@ app.post('/credit-card/pay', async (c) => {
   const uid = c.get('userId');
   const data = await body(c);
   const month = str(data.month, 'mês')!;
-  const [start, end] = monthRange(month);
+  const [invStart, invEnd] = invoiceRange(month);
 
   const totalRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
      WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
   )
-    .bind(uid, start, end)
+    .bind(uid, invStart, invEnd)
     .first<{ total: number }>();
 
   const totalCents = totalRow?.total ?? 0;
@@ -2459,7 +2486,7 @@ app.post('/credit-card/pay', async (c) => {
 
   const balanceStmt = nubankBalance
     ? c.env.DB.prepare(
-        `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+        `UPDATE account_balances SET initial_cents = ? WHERE id = ? AND user_id = ?`,
       ).bind(Math.max(0, nubankBalance.initial_cents - payCents), nubankBalance.id, uid)
     : c.env.DB.prepare(
         `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
@@ -2517,7 +2544,7 @@ app.post('/credit-card/reopen', async (c) => {
     const restored = nubankBalance.initial_cents + paidAmount;
     stmts.push(
       c.env.DB.prepare(
-        `UPDATE account_balances SET initial_cents = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`,
+        `UPDATE account_balances SET initial_cents = ? WHERE id = ? AND user_id = ?`,
       ).bind(restored, nubankBalance.id, uid),
     );
   }
@@ -2990,12 +3017,43 @@ app.post('/integrations/nubank', async (c) => {
       });
     }
 
-    const { id } = (await c.env.DB.prepare(
-      `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
-       VALUES (?, 'nubank', ?, ?, ?) RETURNING id`
+    const inflowMonth = today.slice(0, 7);
+
+    // Atualiza saldo da conta Nubank no mês correspondente
+    const existingBalance = await c.env.DB.prepare(
+      `SELECT id, initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' AND month = ?`,
     )
-      .bind(user.id, parsed.amount_cents, parsed.description, today)
-      .first<{ id: number }>())!;
+      .bind(user.id, inflowMonth)
+      .first<{ id: number; initial_cents: number }>();
+
+    let balanceStmt: D1PreparedStatement;
+    if (existingBalance) {
+      balanceStmt = c.env.DB.prepare(
+        `UPDATE account_balances SET initial_cents = initial_cents + ? WHERE id = ? AND user_id = ?`,
+      ).bind(parsed.amount_cents, existingBalance.id, user.id);
+    } else {
+      const prev = await c.env.DB.prepare(
+        `SELECT initial_cents FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY updated_at DESC LIMIT 1`,
+      )
+        .bind(user.id)
+        .first<{ initial_cents: number }>();
+
+      const base = (prev?.initial_cents ?? 0) + parsed.amount_cents;
+      balanceStmt = c.env.DB.prepare(
+        `INSERT INTO account_balances (user_id, month, account_id, initial_cents, updated_at)
+         VALUES (?, ?, 'nubank', ?, datetime('now'))`,
+      ).bind(user.id, inflowMonth, base);
+    }
+
+    const [insertRes] = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `INSERT INTO inflows (user_id, account_id, amount_cents, description, received_on)
+         VALUES (?, 'nubank', ?, ?, ?) RETURNING id`,
+      ).bind(user.id, parsed.amount_cents, parsed.description, today),
+      balanceStmt,
+    ]);
+
+    const id = (insertRes.results[0] as { id: number }).id;
 
     const inflowSummary = `Entrada recebida: R$ ${(parsed.amount_cents / 100).toFixed(2).replace('.', ',')} (${parsed.title})`;
     await c.env.DB.prepare(
