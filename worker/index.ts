@@ -106,23 +106,24 @@ function monthRange(month: string | undefined) {
 }
 
 /**
- * Retorna [início, fim) do ciclo da fatura do cartão no formato YYYY-MM-DD.
- * O cartão fecha no dia 21 (vence no dia 27).
- * Logo, a fatura do mês YYYY-MM compreende:
- * início: dia 21 do mês anterior (inclusive)
- * fim: dia 21 do mês atual (exclusive -> até 23:59:59 do dia 20)
- * Compras a partir do dia 21 entram na fatura do mês seguinte.
+ * Condição SQL da fatura do cartão (fecha dia 21, vence dia 27). Usa 6 binds (ver invoiceBinds).
+ * Fatura do mês M =
+ *  - tudo do mês M até o dia 20;
+ *  - parcelas (installment_total > 1) do mês M inteiro (já gravadas na data da fatura);
+ *  - compras à vista feitas do dia 21 do mês anterior em diante.
+ * Compras à vista a partir do dia 21 do mês M vão para a fatura M+1.
+ * Nenhum outro lançamento (parcelas) é deslocado.
  */
-function invoiceRange(month: string | undefined, closingDay = 21): [string, string] {
+const INVOICE_COND = `((spent_on >= ? AND spent_on < ?) OR (spent_on >= ? AND spent_on < ? AND COALESCE(installment_total, 1) > 1) OR (spent_on >= ? AND spent_on < ? AND COALESCE(installment_total, 1) <= 1))`;
+
+function invoiceBinds(month: string | undefined, closingDay = 21): string[] {
   if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad('Mês inválido (use YYYY-MM)');
   const [y, m] = month!.split('-').map(Number);
-  const prevDate = new Date(y, m - 2, 1);
-  const prevY = prevDate.getFullYear();
-  const prevM = String(prevDate.getMonth() + 1).padStart(2, '0');
-  const dStr = String(closingDay).padStart(2, '0');
-  const start = `${prevY}-${prevM}-${dStr}`;
-  const end = `${y}-${String(m).padStart(2, '0')}-${dStr}`;
-  return [start, end];
+  const prev = new Date(y, m - 2, 1);
+  const prevKey = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+  const [monthStart, nextStart] = monthRange(month);
+  const d = String(closingDay).padStart(2, '0');
+  return [monthStart, `${month}-${d}`, `${month}-${d}`, nextStart, `${prevKey}-${d}`, monthStart];
 }
 
 const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
@@ -1724,11 +1725,10 @@ app.get('/dashboard', async (c) => {
     .first<{ total: number }>();
   const inflowsTotalCents = inflowRow?.total ?? 0;
 
-  const [invStart, invEnd] = invoiceRange(month);
   const ccRow = await c.env.DB.prepare(
-    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`
+    `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE user_id = ? AND payment_method = 'credit' AND ${INVOICE_COND}`
   )
-    .bind(uid, invStart, invEnd)
+    .bind(uid, ...invoiceBinds(month))
     .first<{ total: number }>();
   const ccTotalCents = ccRow?.total ?? 0;
 
@@ -2308,13 +2308,12 @@ app.get('/credit-card/invoice', async (c) => {
   const uid = c.get('userId');
   const monthParam = c.req.query('month');
   const month = monthParam!;
-  const [invStart, invEnd] = invoiceRange(month);
 
   const { results: expenses } = await c.env.DB.prepare(
-    `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.payment_method = 'credit' AND e.spent_on >= ? AND e.spent_on < ?
+    `${EXPENSE_SELECT} WHERE e.user_id = ? AND e.payment_method = 'credit' AND ${INVOICE_COND}
      ORDER BY e.spent_on DESC, e.id DESC`,
   )
-    .bind(uid, invStart, invEnd)
+    .bind(uid, ...invoiceBinds(month))
     .all();
 
   const totalCents = expenses.reduce((s, x) => s + Number(x.amount_cents || 0), 0);
@@ -2378,13 +2377,12 @@ app.get('/credit-card/invoice', async (c) => {
 
   const history = await Promise.all(
     histMonths.map(async (m) => {
-      const [hStart, hEnd] = invoiceRange(m);
       const row = await c.env.DB.prepare(
         `SELECT COALESCE(SUM(amount_cents), 0) AS total_cents
          FROM expenses
-         WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+         WHERE user_id = ? AND payment_method = 'credit' AND ${INVOICE_COND}`,
       )
-        .bind(uid, hStart, hEnd)
+        .bind(uid, ...invoiceBinds(m))
         .first<{ total_cents: number }>();
       return {
         month: m,
@@ -2396,20 +2394,20 @@ app.get('/credit-card/invoice', async (c) => {
   // Item 12: Simulador de Fechamento de Fatura (Fecha dia 21 e vence dia 27)
   const nextMonthDate = new Date(currY, currM, 1);
   const nextMonthStr = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}`;
-  const [nextInvStart, nextInvEnd] = invoiceRange(nextMonthStr);
   const nextProjRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
-     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+     WHERE user_id = ? AND payment_method = 'credit' AND ${INVOICE_COND}`,
   )
-    .bind(uid, nextInvStart, nextInvEnd)
+    .bind(uid, ...invoiceBinds(nextMonthStr))
     .first<{ total: number }>();
 
-  // Compras realizadas a partir do dia 21 do mês corrente (jogadas para o próximo mês)
+  // Compras à vista a partir do dia 21 do mês corrente (jogadas para o próximo mês)
   const postClosingRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
-     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+     WHERE user_id = ? AND payment_method = 'credit' AND COALESCE(installment_total, 1) <= 1
+       AND spent_on >= ? AND spent_on < ?`,
   )
-    .bind(uid, invEnd, `${nextMonthStr}-01`)
+    .bind(uid, `${month}-21`, `${nextMonthStr}-01`)
     .first<{ total: number }>();
   const from21Cents = postClosingRow?.total ?? 0;
 
@@ -2441,13 +2439,11 @@ app.post('/credit-card/pay', async (c) => {
   const uid = c.get('userId');
   const data = await body(c);
   const month = str(data.month, 'mês')!;
-  const [invStart, invEnd] = invoiceRange(month);
-
   const totalRow = await c.env.DB.prepare(
     `SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses
-     WHERE user_id = ? AND payment_method = 'credit' AND spent_on >= ? AND spent_on < ?`,
+     WHERE user_id = ? AND payment_method = 'credit' AND ${INVOICE_COND}`,
   )
-    .bind(uid, invStart, invEnd)
+    .bind(uid, ...invoiceBinds(month))
     .first<{ total: number }>();
 
   const totalCents = totalRow?.total ?? 0;
