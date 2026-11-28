@@ -295,6 +295,16 @@ export type Inflow = {
   created_at: string;
 };
 
+export type InvoicePayment = {
+  id: number;
+  invoice_month: string;
+  account_id: AccountId;
+  amount_cents: number;
+  is_partial: number;
+  paid_on: string;
+  created_at: string;
+};
+
 export type RedeemResult = {
   ok: boolean;
   account_id: number;

@@ -799,6 +799,7 @@ app.delete('/admin/users/:id', async (c) => {
     c.env.DB.prepare('DELETE FROM expenses WHERE user_id = ?').bind(targetId),
     c.env.DB.prepare('DELETE FROM inflows WHERE user_id = ?').bind(targetId),
     c.env.DB.prepare('DELETE FROM account_balances WHERE user_id = ?').bind(targetId),
+    c.env.DB.prepare('DELETE FROM credit_card_payments WHERE user_id = ?').bind(targetId),
     c.env.DB.prepare('DELETE FROM credit_card_invoices WHERE user_id = ?').bind(targetId),
     c.env.DB.prepare('DELETE FROM investment_snapshots WHERE user_id = ?').bind(targetId),
     c.env.DB.prepare('DELETE FROM investment_accounts WHERE user_id = ?').bind(targetId),
@@ -1650,20 +1651,20 @@ app.get('/dashboard', async (c) => {
     is_unlocked: unlockedSet.has(cat.id),
   }));
 
-  // 1. Balances definidos pelo usuário (prioriza o mês atual, fallback para o mais recente)
+  // 1. Balances definidos pelo usuário: o saldo é "encadeado" entre meses.
+  //    Para o mês consultado usa-se a linha mais recente com month <= mês consultado
+  //    (assim o saldo do mês atual já vale para os meses seguintes até o usuário atualizar).
   const { results: balanceRows } = await c.env.DB.prepare(
     `SELECT account_id, month, initial_cents, updated_at
      FROM account_balances
-     WHERE user_id = ?
-     ORDER BY updated_at DESC`,
-  ).bind(uid).all<{ account_id: string; month: string; initial_cents: number; updated_at: string }>();
+     WHERE user_id = ? AND month <= ?
+     ORDER BY month DESC, updated_at DESC`,
+  ).bind(uid, month).all<{ account_id: string; month: string; initial_cents: number; updated_at: string }>();
 
-  const balancesMap: Record<string, { initial_cents: number; updated_at: string }> = {};
+  const balancesMap: Record<string, { initial_cents: number; updated_at: string; month: string }> = {};
   for (const b of balanceRows) {
     if (!balancesMap[b.account_id]) {
-      balancesMap[b.account_id] = { initial_cents: b.initial_cents, updated_at: b.updated_at };
-    } else if (b.month === month) {
-      balancesMap[b.account_id] = { initial_cents: b.initial_cents, updated_at: b.updated_at };
+      balancesMap[b.account_id] = { initial_cents: b.initial_cents, updated_at: b.updated_at, month: b.month };
     }
   }
 
@@ -1674,7 +1675,7 @@ app.get('/dashboard', async (c) => {
     .bind(uid)
     .all<{ id: number; slug: string; name: string; color: string }>();
 
-  // Gastos que foram criados APENAS APÓS a data/hora em que o saldo daquela conta foi definido
+  // Gastos criados APÓS a data/hora em que o saldo foi definido, do mês-base até o fim do mês consultado
   const accounts = [];
   for (const uAcc of userAccRows.results) {
     const b = balancesMap[uAcc.slug];
@@ -1687,9 +1688,10 @@ app.get('/dashboard', async (c) => {
            AND account_id = ?
            AND payment_method != 'credit'
            AND spent_on >= ?
+           AND spent_on < ?
            AND created_at >= ?`,
       )
-        .bind(uid, uAcc.slug, start, b.updated_at)
+        .bind(uid, uAcc.slug, `${b.month}-01`, end, b.updated_at)
         .first<{ total: number }>();
       spent_cents = row?.total ?? 0;
     }
@@ -2325,14 +2327,14 @@ app.get('/credit-card/invoice', async (c) => {
     .first<{ is_paid: number; paid_at: string | null; paid_amount_cents: number }>();
 
   const nubankRow = await c.env.DB.prepare(
-    `SELECT initial_cents, updated_at FROM account_balances WHERE user_id = ? AND account_id = 'nubank' ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
+    `SELECT initial_cents, updated_at, month AS base_month FROM account_balances WHERE user_id = ? AND account_id = 'nubank' AND month <= ? ORDER BY month DESC, updated_at DESC LIMIT 1`,
   )
     .bind(uid, month)
-    .first<{ initial_cents: number; updated_at: string }>();
+    .first<{ initial_cents: number; updated_at: string; base_month: string }>();
 
   let nubankBalanceCents = nubankRow?.initial_cents ?? 0;
   if (nubankRow && nubankBalanceCents > 0 && nubankRow.updated_at) {
-    const [start] = monthRange(month);
+    const [, monthEnd] = monthRange(month);
     const spentRow = await c.env.DB.prepare(
       `SELECT COALESCE(SUM(amount_cents), 0) AS total
        FROM expenses
@@ -2340,9 +2342,10 @@ app.get('/credit-card/invoice', async (c) => {
          AND account_id = 'nubank'
          AND payment_method != 'credit'
          AND spent_on >= ?
+         AND spent_on < ?
          AND created_at >= ?`,
     )
-      .bind(uid, start, nubankRow.updated_at)
+      .bind(uid, `${nubankRow.base_month}-01`, monthEnd, nubankRow.updated_at)
       .first<{ total: number }>();
     nubankBalanceCents = Math.max(0, nubankBalanceCents - (spentRow?.total ?? 0));
   }
@@ -2470,12 +2473,14 @@ app.post('/credit-card/pay', async (c) => {
 
   const newTotalPaid = currentPaid + payCents;
   const isPaid = newTotalPaid >= totalCents ? 1 : 0;
+  const isPartialPayment = payCents < totalCents ? 1 : 0;
+  const paidOn = getTodayBrasilia();
 
   // Abater do saldo da conta Nubank e atualizar fatura de forma atômica
   const nubankBalance = await c.env.DB.prepare(
     `SELECT id, month, initial_cents FROM account_balances
-     WHERE user_id = ? AND account_id = 'nubank'
-     ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
+     WHERE user_id = ? AND account_id = 'nubank' AND month <= ?
+     ORDER BY month DESC, updated_at DESC LIMIT 1`,
   )
     .bind(uid, month)
     .first<{ id: number; month: string; initial_cents: number }>();
@@ -2497,6 +2502,10 @@ app.post('/credit-card/pay', async (c) => {
        ON CONFLICT(user_id, month)
        DO UPDATE SET is_paid = excluded.is_paid, paid_at = datetime('now'), paid_amount_cents = excluded.paid_amount_cents`,
     ).bind(uid, month, isPaid, newTotalPaid),
+    c.env.DB.prepare(
+      `INSERT INTO credit_card_payments (user_id, invoice_month, account_id, amount_cents, is_partial, paid_on)
+       VALUES (?, ?, 'nubank', ?, ?, ?)`,
+    ).bind(uid, month, payCents, isPartialPayment, paidOn),
   ]);
 
   return c.json({
@@ -2507,6 +2516,22 @@ app.post('/credit-card/pay', async (c) => {
     remaining_cents: Math.max(0, totalCents - newTotalPaid),
     is_paid: isPaid === 1,
   });
+});
+
+app.get('/credit-card/payments', async (c) => {
+  const uid = c.get('userId');
+  const [start, end] = monthRange(c.req.query('month'));
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, invoice_month, account_id, amount_cents, is_partial, paid_on, created_at
+     FROM credit_card_payments
+     WHERE user_id = ? AND paid_on >= ? AND paid_on < ?
+     ORDER BY paid_on DESC, id DESC`,
+  )
+    .bind(uid, start, end)
+    .all();
+
+  return c.json(results);
 });
 
 app.post('/credit-card/reopen', async (c) => {
@@ -2529,8 +2554,8 @@ app.post('/credit-card/reopen', async (c) => {
   // Restaurar o valor abatido no saldo da Nubank
   const nubankBalance = await c.env.DB.prepare(
     `SELECT id, initial_cents FROM account_balances
-     WHERE user_id = ? AND account_id = 'nubank'
-     ORDER BY (month = ?) DESC, updated_at DESC LIMIT 1`,
+     WHERE user_id = ? AND account_id = 'nubank' AND month <= ?
+     ORDER BY month DESC, updated_at DESC LIMIT 1`,
   )
     .bind(uid, month)
     .first<{ id: number; initial_cents: number }>();
@@ -2548,6 +2573,9 @@ app.post('/credit-card/reopen', async (c) => {
   stmts.push(
     c.env.DB.prepare(
       `UPDATE credit_card_invoices SET is_paid = 0, paid_at = NULL, paid_amount_cents = 0 WHERE user_id = ? AND month = ?`,
+    ).bind(uid, month),
+    c.env.DB.prepare(
+      `DELETE FROM credit_card_payments WHERE user_id = ? AND invoice_month = ?`,
     ).bind(uid, month),
   );
 

@@ -9,6 +9,7 @@ import {
   type Category,
   type Expense,
   type Inflow,
+  type InvoicePayment,
   type UserAccount,
 } from '../api';
 import { useMonth, useToast, useConfirm, useConfirmChoice, useViewMode } from '../context';
@@ -98,6 +99,7 @@ export default function History() {
 
   const [expenses, setExpenses] = useState<Expense[] | null>(null);
   const [inflows, setInflows] = useState<Inflow[] | null>(null);
+  const [invoicePayments, setInvoicePayments] = useState<InvoicePayment[] | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
 
@@ -202,14 +204,16 @@ export default function History() {
 
   const load = useCallback(async () => {
     try {
-      const [e, inf, c, accs] = await Promise.all([
+      const [e, inf, invPays, c, accs] = await Promise.all([
         api<Expense[]>(`/expenses?month=${month}`),
         api<Inflow[]>(`/inflows?month=${month}`),
+        api<InvoicePayment[]>(`/credit-card/payments?month=${month}`).catch(() => []),
         api<Category[]>('/categories'),
         api<UserAccount[]>('/accounts').catch(() => []),
       ]);
       setExpenses(e);
       setInflows(inf);
+      setInvoicePayments(invPays);
       setCategories(c);
       setUserAccounts(accs);
     } catch (err) {
@@ -220,6 +224,7 @@ export default function History() {
   useEffect(() => {
     setExpenses(null);
     setInflows(null);
+    setInvoicePayments(null);
     load();
   }, [load]);
 
@@ -286,7 +291,8 @@ export default function History() {
   // Itens unificados do Extrato
   type ExtratoItem =
     | { kind: 'expense'; data: Expense; date: string; id: string }
-    | { kind: 'inflow'; data: Inflow; date: string; id: string };
+    | { kind: 'inflow'; data: Inflow; date: string; id: string }
+    | { kind: 'invoice_payment'; data: InvoicePayment; date: string; id: string };
 
   const filteredItems = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -356,8 +362,29 @@ export default function History() {
       });
     }
 
+    // Pagamentos de Fatura do Cartão (totais ou parciais)
+    if ((typeFilter === 'all' || typeFilter === 'expense') && paymentFilter !== 'credit') {
+      (invoicePayments ?? []).forEach((item) => {
+        const matchesCategory = selectedCategory === 'all';
+        const matchesAccount =
+          selectedAccount === 'all' || item.account_id === selectedAccount;
+        const label = `pagamento de fatura ${monthLabel(item.invoice_month)} ${item.is_partial ? 'parcial' : 'total'} cartao cartão nubank`;
+        const matchesSearch =
+          !q ||
+          (valOperator && valTargetCents !== null
+            ? checkValueMatch(item.amount_cents)
+            : label.toLowerCase().includes(q) ||
+              (item.amount_cents / 100).toFixed(2).replace('.', ',').includes(q));
+        const matchesDate = !selectedDate || item.paid_on === selectedDate;
+
+        if (matchesCategory && matchesAccount && matchesSearch && matchesDate) {
+          result.push({ kind: 'invoice_payment', data: item, date: item.paid_on, id: `invpay_${item.id}` });
+        }
+      });
+    }
+
     return result;
-  }, [expenses, inflows, typeFilter, paymentFilter, selectedCategory, selectedAccount, search, selectedDate]);
+  }, [expenses, inflows, invoicePayments, typeFilter, paymentFilter, selectedCategory, selectedAccount, search, selectedDate]);
 
   const totalFilteredExpenses = useMemo(() => {
     return filteredItems
@@ -368,6 +395,12 @@ export default function History() {
   const totalFilteredInflows = useMemo(() => {
     return filteredItems
       .filter((i): i is ExtratoItem & { kind: 'inflow' } => i.kind === 'inflow')
+      .reduce((acc, curr) => acc + curr.data.amount_cents, 0);
+  }, [filteredItems]);
+
+  const totalFilteredInvoicePayments = useMemo(() => {
+    return filteredItems
+      .filter((i): i is ExtratoItem & { kind: 'invoice_payment' } => i.kind === 'invoice_payment')
       .reduce((acc, curr) => acc + curr.data.amount_cents, 0);
   }, [filteredItems]);
 
@@ -735,6 +768,19 @@ export default function History() {
                   </div>
                 </>
               )}
+              {totalFilteredInvoicePayments > 0 && (
+                <>
+                  <div className="h-8 w-px bg-white/[0.08] hidden sm:block" />
+                  <div>
+                    <p className="text-[11px] font-bold text-purple-400 uppercase tracking-wider">
+                      Fatura Paga
+                    </p>
+                    <p className="text-xl sm:text-2xl font-black tracking-tight text-purple-300 tabular-nums">
+                      {formatBRL(totalFilteredInvoicePayments)}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -1042,6 +1088,53 @@ export default function History() {
                         >
                           <IconTrash className="h-4 w-4" />
                         </button>
+                      </div>
+                    );
+                  }
+
+                  if (item.kind === 'invoice_payment') {
+                    const pay = item.data;
+                    const accInfo = userAccounts.find((a) => a.slug === pay.account_id);
+                    const isPartialPay = Boolean(pay.is_partial);
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 px-4 py-3.5 hover:bg-zinc-900/50 transition bg-purple-500/[0.04]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-bold text-sm text-zinc-100 capitalize">
+                              💳 Pagamento de Fatura • {monthLabel(pay.invoice_month)}
+                            </p>
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[10px] font-extrabold border ${
+                                isPartialPay
+                                  ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                                  : 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                              }`}
+                            >
+                              {isPartialPay ? 'Fatura • Parcial' : 'Fatura • Total'}
+                            </span>
+                            <span className="rounded-md px-2 py-0.5 text-[10px] font-semibold border bg-purple-500/10 text-purple-300 border-purple-500/20">
+                              {accInfo?.name ?? 'Nubank'} • Conta
+                            </span>
+                          </div>
+                          <p className="text-xs text-zinc-500 mt-0.5">
+                            {isPartialPay
+                              ? 'Abatimento parcial da fatura (descontado do saldo em conta)'
+                              : 'Quitação da fatura do cartão (descontado do saldo em conta)'}
+                          </p>
+                        </div>
+                        <span className="font-extrabold text-sm sm:text-base tabular-nums text-purple-300">
+                          -{formatBRL(pay.amount_cents)}
+                        </span>
+                        <Link
+                          to="/cartao"
+                          className="rounded-lg px-2 py-1 text-[11px] font-bold text-purple-300 border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/20 transition shrink-0"
+                          title="Ver fatura do cartão"
+                        >
+                          Fatura
+                        </Link>
                       </div>
                     );
                   }
